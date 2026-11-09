@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import html
 
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
+from telegram.ext import ContextTypes, CallbackQueryHandler
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
@@ -11,22 +14,30 @@ from utils import (
     ensure_group, ensure_private_user, is_group_chat, match_line,
     reply_html_chunks, tournament_summary, user_link,
 )
+import logging
 
+
+
+logger = logging.getLogger(__name__)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_private_user(update, context)
+    try:
+        await ensure_private_user(update, context)
+    except Exception:
+        logger.exception("Could not save private user to MongoDB")
+
     await update.effective_message.reply_text(
         "Welcome to Tournament Manager! 🏆\n\n"
-        "Add me to your Telegram group and make me an admin with permission to pin messages.\n"
-        "A group admin can create one tournament in that group. The creator becomes its tournament manager.\n\n"
-        "Use /help to see all commands. Registration is available only inside the tournament group."
+        "Add me to your Telegram group and make me an admin "
+        "with permission to pin messages.\n"
+        "A group admin can create one tournament in that group. "
+        "The creator becomes its tournament manager.\n\n"
+        "Use /help to see all commands. "
+        "Registration is available only inside the tournament group."
     )
 
 
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ParseMode
-from telegram.ext import ContextTypes, CallbackQueryHandler
 
 
 def help_keyboard():

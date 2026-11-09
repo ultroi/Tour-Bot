@@ -6,7 +6,8 @@ the current tournament announcement workflow.
 """
 from __future__ import annotations
 
-import asyncio
+import os
+from urllib.parse import urlparse
 import logging
 import sys
 import traceback
@@ -378,29 +379,89 @@ def build_application(settings: Settings, db: Database) -> Application:
 
 
 def main() -> None:
-    print("[BOOT] Tournament bot process started", flush=True)
+    """Start the bot behind StackHost's HTTPS reverse proxy using webhooks.
+
+    Required environment variables:
+      WEBHOOK_URL: Public HTTPS base URL, without the webhook path.
+      WEBHOOK_SECRET: Secret accepted by Telegram for authenticating webhook calls.
+
+    Optional environment variables:
+      WEBHOOK_PATH: One URL path segment (default: telegram-webhook).
+      PORT: Internal port supplied by the hosting platform (default: 8080).
+    """
+    print("[BOOT] Tournament bot process started (webhook mode)", flush=True)
 
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
         print("[BOOT] Loading configuration...", flush=True)
         settings = Settings.from_env()
         print("[BOOT] Configuration loaded", flush=True)
 
+        webhook_base = os.getenv("WEBHOOK_URL", "").strip().rstrip("/")
+        webhook_secret = os.getenv("WEBHOOK_SECRET", "").strip()
+        webhook_path = os.getenv("WEBHOOK_PATH", "telegram-webhook").strip().strip("/")
+
+        if not webhook_base:
+            raise RuntimeError(
+                "WEBHOOK_URL is missing. Set it to the public HTTPS base URL "
+                "of this StackHost app (for example, https://your-app.example.com)."
+            )
+        parsed_url = urlparse(webhook_base)
+        if parsed_url.scheme != "https" or not parsed_url.netloc or parsed_url.path:
+            raise RuntimeError(
+                "WEBHOOK_URL must be an HTTPS base URL with no path, "
+                "for example https://your-app.example.com."
+            )
+        if not webhook_secret:
+            raise RuntimeError(
+                "WEBHOOK_SECRET is missing. Set a random secret containing "
+                "1-256 letters, digits, underscores, or hyphens."
+            )
+        if not (1 <= len(webhook_secret) <= 256) or any(
+            char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+            for char in webhook_secret
+        ):
+            raise RuntimeError(
+                "WEBHOOK_SECRET must be 1-256 characters using only letters, "
+                "digits, underscores, and hyphens."
+            )
+        if not webhook_path or "/" in webhook_path:
+            raise RuntimeError(
+                "WEBHOOK_PATH must be a single non-empty path segment, "
+                "for example telegram-webhook."
+            )
+
+        try:
+            port = int(os.getenv("PORT", "8080"))
+        except ValueError as exc:
+            raise RuntimeError("PORT must be a valid integer.") from exc
+        if not (1 <= port <= 65535):
+            raise RuntimeError("PORT must be between 1 and 65535.")
+
+        webhook_url = f"{webhook_base}/{webhook_path}"
+
         print("[BOOT] Initializing database...", flush=True)
-        db = Database(
-            settings.mongodb_uri,
-            settings.database_name
-        )
+        db = Database(settings.mongodb_uri, settings.database_name)
 
         print("[BOOT] Building Telegram application...", flush=True)
         application = build_application(settings, db)
 
-        print("[BOOT] Starting Telegram polling...", flush=True)
+        print(
+            f"[BOOT] Starting webhook listener on 0.0.0.0:{port}; "
+            f"public webhook: {webhook_url}",
+            flush=True,
+        )
 
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES
+        # StackHost terminates HTTPS at its reverse proxy and forwards requests
+        # to the internal PORT. Telegram connects to the public HTTPS URL above.
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=webhook_path,
+            webhook_url=webhook_url,
+            secret_token=webhook_secret,
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=False,
+            bootstrap_retries=3,
         )
 
     except Exception:
