@@ -1,0 +1,27 @@
+user:
+  name: Akshay
+  github: ultroi
+
+runtime:
+  name: python
+  version: "3.11"
+  image: python:3.11-slim
+
+commands:
+  package: ""
+  build:
+    - pip install --no-cache-dir -r requirements.txt
+    - python -m compileall -q .
+  start: "python app.py"
+
+repository:
+  branch: main
+  auto_deploy: true
+
+env:
+  - BOT_TOKEN:BOT_TOKEN
+  - GROQ_API_KEY:GROQ_API_KEY
+  - MONGODB_URI:MONGODB_URI
+  - DATABASE_NAME:tournament_manager
+  - ADMIN_IDS:6439532660
+  - ANNOUNCEMENT_PIN_HOURS:24
