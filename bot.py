@@ -351,15 +351,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # Windows-specific fix to prevent other asyncio issues
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-        
-    # Manually create and set a new event loop
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
     main()
