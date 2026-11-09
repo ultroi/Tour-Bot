@@ -19,8 +19,6 @@ repository:
   auto_deploy: false
 
 env:
-  - BOT_TOKEN:BOT_TOKEN
-  - MONGODB_URI:MONGODB_URI
   - DATABASE_NAME:tournament_manager
   - ADMIN_IDS:6439532660
   - ANNOUNCEMENT_PIN_HOURS:24
