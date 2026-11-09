@@ -27,6 +27,7 @@ from config import Settings
 from database import Database
 from handlers import admin, user
 from services.tournament_service import TournamentService
+from utils import ensure_private_user, ensure_group
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -75,6 +76,24 @@ def permission_setup_message(missing: list[str]) -> str:
         "I will automatically check again when a command is used. "
         "Tournament commands remain disabled until the required rights are granted."
     )
+
+
+async def data_storage_middleware(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Automatically store users and groups in the database on every interaction."""
+    chat = update.effective_chat
+    if not chat:
+        return
+
+    try:
+        if chat.type == "private":
+            await ensure_private_user(update, context)
+        elif chat.type in GROUP_TYPES:
+            await ensure_group(update, context)
+    except Exception:
+        logger.exception("Failed to store user/group data in middleware")
 
 
 async def group_permission_guard(
@@ -217,7 +236,6 @@ async def error_handler(
         logger.error("Unhandled Telegram update error without exception details")
 
     # Send every unhandled error to the configured owner/admin Telegram account.
-    # Keep this notification isolated so a DM failure does not cause another error loop.
     try:
         error_text = (
             "".join(traceback.format_exception(type(error), error, error.__traceback__))
@@ -252,7 +270,6 @@ async def error_handler(
             + error_text
         )
 
-        # Telegram message limit is 4096 characters; send in safe-sized chunks.
         chunks = [report[i:i + 3900] for i in range(0, len(report), 3900)]
         for chunk in chunks:
             await context.bot.send_message(
@@ -262,7 +279,6 @@ async def error_handler(
     except Exception:
         logger.exception("Could not DM the error report to owner ID 6439532660")
 
-    # Also notify the user in the originating chat when possible.
     if isinstance(update, Update) and update.effective_message:
         try:
             await update.effective_message.reply_text(
@@ -285,6 +301,12 @@ def build_application(settings: Settings, db: Database) -> Application:
     application.bot_data["db"] = db
     application.bot_data["tournament_service"] = TournamentService(db)
 
+    # Automatically store users and groups in the database on every interaction.
+    application.add_handler(
+        TypeHandler(Update, data_storage_middleware),
+        group=-3,
+    )
+
     # Check membership/rights changes as soon as Telegram reports them.
     application.add_handler(
         ChatMemberHandler(
@@ -302,6 +324,7 @@ def build_application(settings: Settings, db: Database) -> Application:
 
     # Participant commands.
     application.add_handler(CommandHandler("start", user.start))
+    application.add_handler(CommandHandler("stats", user.stats))
     application.add_handler(CommandHandler("help", user.help_command))
     application.add_handler(CommandHandler("tournaments", user.list_tournaments))
     application.add_handler(CommandHandler("tournament", user.view_tournament))

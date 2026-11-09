@@ -381,3 +381,24 @@ async def standings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not any(row["played"] for _, row in ranked):
         lines.append("\nNo match results have been recorded yet. Each win is worth 3 points.")
     await reply_html_chunks(update.effective_message, lines)
+
+from telegram import Update
+from telegram.ext import ContextTypes
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show real-time statistics for the bot."""
+    db = context.application.bot_data["db"]
+    
+    # Query MongoDB for total document counts
+    total_users = await db.users.count_documents({})
+    total_groups = await db.groups.count_documents({})
+    total_tournaments = await db.tournaments.count_documents({})
+    
+    stats_message = (
+        "📊 <b>Bot Real-Time Statistics</b>\n\n"
+        f"👤 <b>Total Users:</b> {total_users}\n"
+        f"👥 <b>Total Groups:</b> {total_groups}\n"
+        f"🏆 <b>Total Tournaments:</b> {total_tournaments}"
+    )
+    
+    await update.effective_message.reply_text(stats_message, parse_mode="HTML")
