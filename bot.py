@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import logging
 import sys
 import traceback
-
+import asyncio
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -389,12 +389,23 @@ def main() -> None:
       WEBHOOK_PATH: One URL path segment (default: telegram-webhook).
       PORT: Internal port supplied by the hosting platform (default: 8080).
     """
+    # --- FIX FOR PYTHON 3.12+ & WINDOWS ---
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    # --------------------------------------
+
     print("[BOOT] Tournament bot process started (webhook mode)", flush=True)
 
     try:
         print("[BOOT] Loading configuration...", flush=True)
         settings = Settings.from_env()
         print("[BOOT] Configuration loaded", flush=True)
+
+        import os
+        from urllib.parse import urlparse
 
         webhook_base = os.getenv("WEBHOOK_URL", "").strip().rstrip("/")
         webhook_secret = os.getenv("WEBHOOK_SECRET", "").strip()
