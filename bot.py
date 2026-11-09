@@ -387,51 +387,50 @@ def main() -> None:
     asyncio.set_event_loop(loop)
     # --------------------------------------
 
-    print("[BOOT] Tournament bot process started", flush=True)
+    print("[BOOT] Tournament bot process started (Hybrid Polling Mode)", flush=True)
 
     try:
+        import os
         print("[BOOT] Loading configuration...", flush=True)
         settings = Settings.from_env()
         print("[BOOT] Configuration loaded", flush=True)
 
-        import os
+        # =========================================================
+        # FAKE WEB SERVER: StackHost ko zinda dikhane ke liye
+        # =========================================================
+        port = int(os.getenv("PORT", "8080"))
         
+        async def handle_client(reader, writer):
+            try:
+                # StackHost jab ping karega toh hum usko 200 OK bolenge
+                request = await asyncio.wait_for(reader.read(1024), timeout=2.0)
+                response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nBot is alive!"
+                writer.write(response.encode('utf8'))
+                await writer.drain()
+            except Exception:
+                pass
+            finally:
+                writer.close()
+
+        async def start_dummy_server():
+            server = await asyncio.start_server(handle_client, '0.0.0.0', port)
+            print(f"[BOOT] Dummy health-check server listening on port {port}", flush=True)
+            async with server:
+                await server.serve_forever()
+        
+        # Is dummy server ko background task me start kar do
+        loop.create_task(start_dummy_server())
+        # =========================================================
+
         print("[BOOT] Initializing database...", flush=True)
         db = Database(settings.mongodb_uri, settings.database_name)
 
         print("[BOOT] Building Telegram application...", flush=True)
         application = build_application(settings, db)
 
-        # AGAR WEBHOOK_URL HAI TOH CLOUD WALA MODE CHALAYEGA
-        webhook_base = os.getenv("WEBHOOK_URL", "").strip().rstrip("/")
-        
-        if webhook_base:
-            print("[BOOT] Starting in WEBHOOK mode...", flush=True)
-            webhook_secret = os.getenv("WEBHOOK_SECRET", "").strip()
-            webhook_path = os.getenv("WEBHOOK_PATH", "telegram-webhook").strip().strip("/")
-
-            if not webhook_secret:
-                raise RuntimeError("WEBHOOK_SECRET is missing.")
-            
-            port = int(os.getenv("PORT", "8080"))
-            webhook_url = f"{webhook_base}/{webhook_path}"
-
-            print(f"[BOOT] Webhook listener on 0.0.0.0:{port}; URL: {webhook_url}", flush=True)
-            application.run_webhook(
-                listen="0.0.0.0",
-                port=port,
-                url_path=webhook_path,
-                webhook_url=webhook_url,
-                secret_token=webhook_secret,
-                allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=False,
-                bootstrap_retries=3,
-            )
-            
-        # AGAR WEBHOOK_URL NAHI HAI, TOH POLLING MODE CHALAYEGA (NO 502 ERRORS)
-        else:
-            print("[BOOT] Starting in POLLING mode (Bypassing Proxies)...", flush=True)
-            application.run_polling(allowed_updates=Update.ALL_TYPES)
+        # Polling start karte hi PTB automatically purane stuck webhooks delete kar deta hai!
+        print("[BOOT] Starting in POLLING mode (Bypassing Proxies)...", flush=True)
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
 
     except Exception:
         import traceback
