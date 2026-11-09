@@ -20,7 +20,6 @@ repository:
 
 env:
   - BOT_TOKEN:BOT_TOKEN
-  - GROQ_API_KEY:GROQ_API_KEY
   - MONGODB_URI:MONGODB_URI
   - DATABASE_NAME:tournament_manager
   - ADMIN_IDS:6439532660
