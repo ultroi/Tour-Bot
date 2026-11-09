@@ -32,6 +32,8 @@ from utils import ensure_private_user, ensure_group
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     level=logging.INFO,
+    stream=sys.stdout,
+    force=True,
 )
 logger = logging.getLogger(__name__)
 
@@ -194,11 +196,19 @@ async def on_bot_membership_change(
 
 
 async def post_init(application: Application) -> None:
+    print("[BOOT] Connecting to MongoDB...", flush=True)
+
     db: Database = application.bot_data["db"]
     await db.connect()
-    logger.info("MongoDB connection established")
+
+    print("[BOOT] MongoDB connected!", flush=True)
 
     bot = await application.bot.get_me()
+
+    print(
+        f"[BOOT] Telegram connected: @{bot.username}",
+        flush=True
+    )
     logger.info("Tournament Manager Bot started as @%s", bot.username)
 
     if application.job_queue:
@@ -366,15 +376,36 @@ def build_application(settings: Settings, db: Database) -> Application:
     return application
 
 
-def main() -> None:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    # --------------------------------------
 
-    settings = Settings.from_env()
-    db = Database(settings.mongodb_uri, settings.database_name)
-    application = build_application(settings, db)
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+def main() -> None:
+    print("[BOOT] Tournament bot process started", flush=True)
+
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        print("[BOOT] Loading configuration...", flush=True)
+        settings = Settings.from_env()
+        print("[BOOT] Configuration loaded", flush=True)
+
+        print("[BOOT] Initializing database...", flush=True)
+        db = Database(
+            settings.mongodb_uri,
+            settings.database_name
+        )
+
+        print("[BOOT] Building Telegram application...", flush=True)
+        application = build_application(settings, db)
+
+        print("[BOOT] Starting Telegram polling...", flush=True)
+
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES
+        )
+
+    except Exception:
+        traceback.print_exc(file=sys.stdout)
+        raise
 
 
 if __name__ == "__main__":
