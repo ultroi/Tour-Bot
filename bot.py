@@ -344,6 +344,16 @@ def build_application(settings: Settings, db: Database) -> Application:
 
 
 def main() -> None:
+    # --- FIX FOR PYTHON 3.12+ & WINDOWS ---
+    # 1. Prevent "Event loop is closed" errors on Windows shutdown
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
+    # 2. Explicitly create and set a new event loop for Python 3.12+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    # --------------------------------------
+
     settings = Settings.from_env()
     db = Database(settings.mongodb_uri, settings.database_name)
     application = build_application(settings, db)
