@@ -1,0 +1,316 @@
+"""Telegram entry point for the group-based Tournament Manager Bot.
+
+The bot refuses to process group commands until it is a group administrator
+with permission to pin messages. This is the minimum privilege required by
+the current tournament announcement workflow.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import sys
+
+from telegram import Update
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    ApplicationHandlerStop,
+    CallbackQueryHandler,
+    ChatMemberHandler,
+    CommandHandler,
+    ContextTypes,
+    TypeHandler,
+)
+
+from config import Settings
+from database import Database
+from handlers import admin, user
+from services.tournament_service import TournamentService
+
+logging.basicConfig(
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
+
+GROUP_TYPES = {"group", "supergroup"}
+
+# Do not request every Telegram admin permission. For the features currently
+# implemented, administrator status + can_pin_messages are the required rights.
+REQUIRED_RIGHTS = {
+    "can_pin_messages": "Pin Messages",
+}
+
+
+async def check_bot_group_permissions(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+) -> tuple[bool, list[str]]:
+    """Return whether the bot has the required group permissions."""
+    bot = await context.bot.get_me()
+    member = await context.bot.get_chat_member(chat_id=chat_id, user_id=bot.id)
+
+    if member.status not in {"administrator", "creator"}:
+        return False, ["Promote the bot to a group administrator."]
+
+    missing = [
+        label
+        for attribute, label in REQUIRED_RIGHTS.items()
+        if not bool(getattr(member, attribute, False))
+    ]
+    return not missing, missing
+
+
+def permission_setup_message(missing: list[str]) -> str:
+    details = "\n".join(f"• {item}" for item in missing)
+    return (
+        "⛔ <b>TOURNAMENT BOT SETUP REQUIRED</b>\n\n"
+        "I cannot start tournament operations in this group yet.\n\n"
+        "<b>Please ask the group owner/admin to:</b>\n"
+        "1. Open Group Settings → Administrators.\n"
+        "2. Add/promote this bot as an administrator.\n"
+        "3. Enable <b>Pin Messages</b> permission.\n\n"
+        f"<b>Missing requirement(s):</b>\n{details}\n\n"
+        "I will automatically check again when a command is used. "
+        "Tournament commands remain disabled until the required rights are granted."
+    )
+
+
+async def group_permission_guard(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Stop every group command/callback until required bot rights are granted."""
+    chat = update.effective_chat
+    if not chat or chat.type not in GROUP_TYPES:
+        return
+
+    message = update.effective_message
+    callback = update.callback_query
+
+    # Gate commands and inline-button callbacks, not ordinary group conversation.
+    is_command = bool(
+        message
+        and message.text
+        and message.text.lstrip().startswith("/")
+    )
+    is_group_callback = bool(callback and callback.message)
+    if not (is_command or is_group_callback):
+        return
+
+    try:
+        ready, missing = await check_bot_group_permissions(context, chat.id)
+    except Exception:
+        logger.exception("Could not verify bot permissions in group %s", chat.id)
+        missing = [
+            "Could not verify the bot's administrator permissions. "
+            "Please make the bot a group administrator and try again."
+        ]
+        ready = False
+
+    if ready:
+        return
+
+    notice = permission_setup_message(missing)
+    try:
+        if callback:
+            await callback.answer(
+                "Bot setup incomplete. Ask a group admin to grant the required rights.",
+                show_alert=True,
+            )
+            if callback.message:
+                await callback.message.reply_text(notice, parse_mode="HTML")
+        elif message:
+            await message.reply_text(notice, parse_mode="HTML")
+    except Exception:
+        logger.exception("Could not send permission setup notice in group %s", chat.id)
+
+    # Prevent all later command/callback handlers from running.
+    raise ApplicationHandlerStop
+
+
+async def on_bot_membership_change(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Notify the group when the bot is added or its admin rights change."""
+    change = update.my_chat_member
+    if not change:
+        return
+
+    chat = change.chat
+    if chat.type not in GROUP_TYPES:
+        return
+
+    new_status = change.new_chat_member.status
+    if new_status in {"left", "kicked"}:
+        return
+
+    try:
+        ready, missing = await check_bot_group_permissions(context, chat.id)
+    except Exception:
+        logger.exception("Could not inspect bot membership in group %s", chat.id)
+        ready = False
+        missing = ["Unable to verify permissions. Please try again."]
+
+    if ready:
+        text = (
+            "✅ <b>TOURNAMENT MANAGER IS READY</b>\n\n"
+            "Thanks! I have the required group administrator access and "
+            "<b>Pin Messages</b> permission.\n\n"  
+            "You can now use /help to explore tournament commands."
+        )
+    else:
+        text = permission_setup_message(missing)
+
+    try:
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=text,
+            parse_mode="HTML",
+        )
+    except Exception:
+        logger.exception("Could not send setup status to group %s", chat.id)
+
+
+async def post_init(application: Application) -> None:
+    db: Database = application.bot_data["db"]
+    await db.connect()
+    logger.info("MongoDB connection established")
+
+    bot = await application.bot.get_me()
+    logger.info("Tournament Manager Bot started as @%s", bot.username)
+
+    if application.job_queue:
+        # Due times are stored in MongoDB, so pending unpins survive restarts.
+        application.job_queue.run_repeating(
+            admin.process_due_unpins,
+            interval=60,
+            first=60,
+            name="process-due-announcement-unpins",
+        )
+    else:      
+        logger.warning(
+            "JobQueue is unavailable; automatic announcement unpinning is disabled"
+        )
+
+
+async def post_shutdown(application: Application) -> None:
+    db: Database | None = application.bot_data.get("db")
+    if db:
+        await db.close()
+        logger.info("MongoDB connection closed")
+
+
+async def error_handler(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    error = context.error
+    if error:
+        logger.error(
+            "Unhandled Telegram update error",
+            exc_info=(type(error), error, error.__traceback__),
+        )
+    else:
+        logger.error("Unhandled Telegram update error without exception details")
+
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                "Something went wrong. Please try again or contact the tournament manager."
+            )
+        except Exception:
+            logger.exception("Could not send error message to user")
+
+
+def build_application(settings: Settings, db: Database) -> Application:
+    application = (
+        ApplicationBuilder()
+        .token(settings.bot_token)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
+
+    application.bot_data["settings"] = settings
+    application.bot_data["db"] = db
+    application.bot_data["tournament_service"] = TournamentService(db)
+
+    # Check membership/rights changes as soon as Telegram reports them.
+    application.add_handler(
+        ChatMemberHandler(
+            on_bot_membership_change,
+            ChatMemberHandler.MY_CHAT_MEMBER,
+        ),
+        group=-2,
+    )
+
+    # This guard runs before all normal command and callback handlers.
+    application.add_handler(
+        TypeHandler(Update, group_permission_guard),
+        group=-1,
+    )
+
+    # Participant commands.
+    application.add_handler(CommandHandler("start", user.start))
+    application.add_handler(CommandHandler("help", user.help_command))
+    application.add_handler(CommandHandler("tournaments", user.list_tournaments))
+    application.add_handler(CommandHandler("tournament", user.view_tournament))
+    application.add_handler(CommandHandler("register", user.register))
+    application.add_handler(CommandHandler("unregister", user.unregister))
+    application.add_handler(CommandHandler("rules", user.view_rules))
+    application.add_handler(CommandHandler("fixtures", user.view_fixtures))
+    application.add_handler(CommandHandler("myreg", user.my_registrations))
+    application.add_handler(CommandHandler("participants", user.list_participants))
+    application.add_handler(CommandHandler("standings", user.standings))
+    application.add_handler(CommandHandler("myid", user.my_id))
+
+    # Admin/manager commands; role checks remain inside their handlers.
+    application.add_handler(CommandHandler("newtournament", admin.new_tournament))
+    application.add_handler(CommandHandler("addtouradmin", admin.add_tournament_admin))
+    application.add_handler(CommandHandler("rmtouradmin", admin.remove_tournament_admin))
+    application.add_handler(CommandHandler("setdescription", admin.set_description))
+    application.add_handler(CommandHandler("setrules", admin.set_rules))
+    application.add_handler(CommandHandler("open", admin.set_tournament_status))
+    application.add_handler(CommandHandler("close", admin.set_tournament_status))
+    application.add_handler(CommandHandler("complete", admin.set_tournament_status))
+    application.add_handler(CommandHandler("generatefixtures", admin.generate_fixtures))
+    application.add_handler(CommandHandler("setresult", admin.set_result))
+    application.add_handler(CommandHandler("announce", admin.announce))
+    application.add_handler(CommandHandler("announceall", admin.announce))
+    application.add_handler(
+        CommandHandler("unpinannouncement", admin.unpin_announcement)
+    )
+    application.add_handler(CommandHandler("admintournaments", admin.admin_tournaments))
+    application.add_handler(
+        CommandHandler("adminparticipants", admin.admin_participants)
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(user.help_callback, pattern=r"^help:")
+    )
+
+    application.add_error_handler(error_handler)
+    return application
+
+
+def main() -> None:
+    settings = Settings.from_env()
+    db = Database(settings.mongodb_uri, settings.database_name)
+    application = build_application(settings, db)
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    # Windows-specific fix to prevent other asyncio issues
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        
+    # Manually create and set a new event loop
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+    main()

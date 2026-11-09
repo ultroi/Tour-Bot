@@ -1,0 +1,314 @@
+"""Tournament business rules and MongoDB operations."""
+from __future__ import annotations
+
+import secrets
+from datetime import datetime, timezone
+from typing import Any
+
+from pymongo import ASCENDING, ReturnDocument
+from pymongo.errors import DuplicateKeyError
+
+from database import Database
+from services.fixture_service import generate_fixtures
+
+VALID_FORMATS = {"knockout", "round_robin"}
+VALID_STATUSES = {"open", "closed", "ongoing", "completed"}
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class TournamentService:
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    async def create_tournament(
+        self,
+        name: str,
+        tournament_format: str,
+        capacity: int,
+        manager_id: int,
+        manager_name: str,
+        group_id: int,
+        group_title: str,
+        description: str = "",
+    ) -> dict[str, Any]:
+        normalized_format = tournament_format.strip().lower().replace("-", "_")
+        if normalized_format not in VALID_FORMATS:
+            raise ValueError("Format must be `knockout` or `round_robin`.")
+        if not 2 <= capacity <= 512:
+            raise ValueError("Maximum participants must be between 2 and 512.")
+        clean_name = name.strip()
+        if not 3 <= len(clean_name) <= 80:
+            raise ValueError("Tournament name must be between 3 and 80 characters.")
+        clean_description = description.strip()
+        if len(clean_description) > 2000:
+            raise ValueError("Description must be 2,000 characters or fewer.")
+
+        tournament_id = secrets.token_hex(3).upper()
+        document = {
+            "_id": tournament_id,
+            "name": clean_name,
+            "description": clean_description,
+            "format": normalized_format,
+            "capacity": capacity,
+            "registered_count": 0,
+            "status": "open",
+            "rules": "Rules have not been added yet. The tournament manager will update them soon.",
+            "group_id": int(group_id),
+            "group_title": group_title,
+            "manager_id": int(manager_id),
+            "manager_name": (manager_name or "Tournament Manager")[:64],
+            "tournament_admins": [],
+            "tournament_admin_names": {},
+            "created_by": int(manager_id),
+            "created_at": utc_now(),
+            "fixtures_generated": False,
+            "is_active": True,
+            "last_announcement_message_id": None,
+            "announcement_pin_until": None,
+        }
+        try:
+            await self.db.tournaments.insert_one(document)
+        except DuplicateKeyError as exc:
+            raise ValueError("This group already has an active tournament. Complete it before creating another.") from exc
+        return document
+
+    async def get_tournament(self, tournament_id: str) -> dict[str, Any] | None:
+        return await self.db.tournaments.find_one({"_id": tournament_id.strip().upper()})
+
+    async def get_group_tournament(self, group_id: int, tournament_id: str | None = None) -> dict[str, Any] | None:
+        query: dict[str, Any] = {"group_id": int(group_id)}
+        if tournament_id:
+            query["_id"] = tournament_id.strip().upper()
+        else:
+            query["is_active"] = True
+        return await self.db.tournaments.find_one(query, sort=[("created_at", -1)])
+
+    async def get_active_tournament(self, group_id: int) -> dict[str, Any] | None:
+        return await self.get_group_tournament(group_id)
+
+    async def list_tournaments(self, status: str | None = None, group_id: int | None = None) -> list[dict[str, Any]]:
+        query: dict[str, Any] = {}
+        if status:
+            query["status"] = status
+        if group_id is not None:
+            query["group_id"] = int(group_id)
+        cursor = self.db.tournaments.find(query).sort("created_at", -1).limit(25)
+        return await cursor.to_list(length=25)
+
+    async def set_rules(self, tournament_id: str, rules: str) -> bool:
+        result = await self.db.tournaments.update_one(
+            {"_id": tournament_id.upper()}, {"$set": {"rules": rules.strip()}}
+        )
+        return result.matched_count > 0
+
+    async def set_description(self, tournament_id: str, description: str) -> bool:
+        if len(description.strip()) > 2000:
+            raise ValueError("Description must be 2,000 characters or fewer.")
+        result = await self.db.tournaments.update_one(
+            {"_id": tournament_id.upper()}, {"$set": {"description": description.strip()}}
+        )
+        return result.matched_count > 0
+
+    async def set_status(self, tournament_id: str, status: str) -> bool:
+        normalized = status.strip().lower()
+        if normalized not in VALID_STATUSES:
+            raise ValueError("Status must be open, closed, ongoing, or completed.")
+        tournament = await self.get_tournament(tournament_id)
+        if not tournament:
+            return False
+        if normalized in {"open", "closed"} and (tournament.get("fixtures_generated") or tournament.get("status") == "generating"):
+            raise ValueError("Registration status cannot be changed after fixture generation has started.")
+        if normalized == "ongoing" and not tournament.get("fixtures_generated"):
+            raise ValueError("Generate fixtures before marking a tournament as ongoing.")
+        update = {"status": normalized, "is_active": normalized != "completed"}
+        result = await self.db.tournaments.update_one({"_id": tournament["_id"]}, {"$set": update})
+        return result.matched_count > 0
+
+    async def add_tournament_admin(self, tournament_id: str, user_id: int, first_name: str = "Tournament Admin") -> str:
+        tournament = await self.get_tournament(tournament_id)
+        if not tournament:
+            return "not_found"
+        if int(user_id) == int(tournament["manager_id"]):
+            return "is_manager"
+        if int(user_id) in tournament.get("tournament_admins", []):
+            return "already_admin"
+        await self.db.tournaments.update_one(
+            {"_id": tournament["_id"]},
+            {
+                "$addToSet": {"tournament_admins": int(user_id)},
+                "$set": {f"tournament_admin_names.{int(user_id)}": (first_name or "Tournament Admin")[:64]},
+            },
+        )
+        return "added"
+
+    async def remove_tournament_admin(self, tournament_id: str, user_id: int) -> str:
+        tournament = await self.get_tournament(tournament_id)
+        if not tournament:
+            return "not_found"
+        result = await self.db.tournaments.update_one(
+            {"_id": tournament["_id"]},
+            {
+                "$pull": {"tournament_admins": int(user_id)},
+                "$unset": {f"tournament_admin_names.{int(user_id)}": ""},
+            },
+        )
+        return "removed" if result.modified_count else "not_admin"
+
+    async def register(
+        self,
+        tournament_id: str,
+        group_id: int,
+        user_id: int,
+        first_name: str,
+        username: str | None,
+    ) -> str:
+        """Register using Telegram's first name; callers must be in the group."""
+        tid = tournament_id.upper()
+        tournament = await self.db.tournaments.find_one({"_id": tid, "group_id": int(group_id), "is_active": True})
+        if not tournament:
+            return "not_found"
+        if tournament["status"] != "open":
+            return "closed"
+        if await self.db.registrations.find_one({"tournament_id": tid, "user_id": int(user_id)}):
+            return "already_registered"
+
+        reserved = await self.db.tournaments.find_one_and_update(
+            {
+                "_id": tid,
+                "group_id": int(group_id),
+                "status": "open",
+                "is_active": True,
+                "$expr": {"$lt": ["$registered_count", "$capacity"]},
+            },
+            {"$inc": {"registered_count": 1}},
+            return_document=ReturnDocument.AFTER,
+        )
+        if not reserved:
+            latest = await self.db.tournaments.find_one({"_id": tid, "group_id": int(group_id)})
+            if not latest or not latest.get("is_active", False):
+                return "not_found"
+            if latest["status"] != "open":
+                return "closed"
+            return "full"
+
+        registration = {
+            "tournament_id": tid,
+            "group_id": int(group_id),
+            "user_id": int(user_id),
+            "name": (first_name or "Player").strip()[:50],
+            "username": username,
+            "registered_at": utc_now(),
+        }
+        try:
+            await self.db.registrations.insert_one(registration)
+        except DuplicateKeyError:
+            await self.db.tournaments.update_one({"_id": tid}, {"$inc": {"registered_count": -1}})
+            return "already_registered"
+        except Exception:
+            await self.db.tournaments.update_one({"_id": tid}, {"$inc": {"registered_count": -1}})
+            raise
+        return "registered"
+
+    async def unregister(self, tournament_id: str, group_id: int, user_id: int) -> str:
+        tid = tournament_id.upper()
+        tournament = await self.db.tournaments.find_one({"_id": tid, "group_id": int(group_id)})
+        if not tournament:
+            return "not_found"
+        if tournament.get("fixtures_generated"):
+            return "fixtures_exist"
+        result = await self.db.registrations.delete_one(
+            {"tournament_id": tid, "group_id": int(group_id), "user_id": int(user_id)}
+        )
+        if result.deleted_count:
+            await self.db.tournaments.update_one({"_id": tid}, {"$inc": {"registered_count": -1}})
+            return "unregistered"
+        return "not_registered"
+
+    async def get_participants(self, tournament_id: str) -> list[dict[str, Any]]:
+        cursor = self.db.registrations.find({"tournament_id": tournament_id.upper()}).sort("registered_at", ASCENDING)
+        registrations = await cursor.to_list(length=512)
+        return [
+            {"user_id": item["user_id"], "name": item["name"], "username": item.get("username")}
+            for item in registrations
+        ]
+
+    async def generate(self, tournament_id: str, group_id: int) -> list[dict[str, Any]]:
+        tid = tournament_id.upper()
+        tournament = await self.db.tournaments.find_one({"_id": tid, "group_id": int(group_id), "is_active": True})
+        if not tournament:
+            raise LookupError("No active tournament with that ID was found in this group.")
+        if tournament.get("fixtures_generated"):
+            raise ValueError("Fixtures have already been generated for this tournament.")
+        if tournament.get("status") not in {"open", "closed"}:
+            raise ValueError("Fixtures can only be generated while registration is open or closed.")
+
+        claim = await self.db.tournaments.update_one(
+            {"_id": tid, "group_id": int(group_id), "status": {"$in": ["open", "closed"]}, "fixtures_generated": {"$ne": True}},
+            {"$set": {"status": "generating"}},
+        )
+        if not claim.modified_count:
+            raise ValueError("Fixture generation is already running or has already completed.")
+        try:
+            await self.db.matches.delete_many({"tournament_id": tid})
+            participants = await self.get_participants(tid)
+            fixtures = generate_fixtures(participants, tid, tournament["format"])
+            await self.db.matches.insert_many(fixtures)
+            await self.db.tournaments.update_one(
+                {"_id": tid, "status": "generating"},
+                {"$set": {"fixtures_generated": True, "status": "ongoing", "fixtures_generated_at": utc_now()}},
+            )
+            return fixtures
+        except Exception:
+            await self.db.matches.delete_many({"tournament_id": tid})
+            await self.db.tournaments.update_one(
+                {"_id": tid, "status": "generating"},
+                {"$set": {"status": tournament["status"], "fixtures_generated": False}, "$unset": {"fixtures_generated_at": ""}},
+            )
+            raise
+
+    async def get_matches(self, tournament_id: str) -> list[dict[str, Any]]:
+        cursor = self.db.matches.find({"tournament_id": tournament_id.upper()}).sort([("round", ASCENDING), ("match_no", ASCENDING)])
+        return await cursor.to_list(length=2048)
+
+    async def set_result(self, tournament_id: str, match_id: str, winner_id: int) -> str:
+        tid = tournament_id.upper()
+        match = await self.db.matches.find_one({"tournament_id": tid, "match_id": match_id.upper()})
+        if not match:
+            return "match_not_found"
+        if match["status"] != "scheduled":
+            return "match_not_ready"
+        if int(winner_id) not in {match.get("player1_id"), match.get("player2_id")}:
+            return "winner_not_in_match"
+
+        winner_name = match["player1_name"] if winner_id == match["player1_id"] else match["player2_name"]
+        updated = await self.db.matches.update_one(
+            {"_id": match["_id"], "status": "scheduled"},
+            {"$set": {"status": "completed", "winner_id": int(winner_id), "winner_name": winner_name, "completed_at": utc_now()}},
+        )
+        if not updated.modified_count:
+            return "match_not_ready"
+
+        next_match_id = match.get("next_match_id")
+        if next_match_id:
+            next_slot = int(match["next_slot"])
+            await self.db.matches.update_one(
+                {"tournament_id": tid, "match_id": next_match_id},
+                {"$set": {f"player{next_slot}_id": int(winner_id), f"player{next_slot}_name": winner_name}},
+            )
+            next_match = await self.db.matches.find_one({"tournament_id": tid, "match_id": next_match_id})
+            if next_match and next_match.get("player1_id") and next_match.get("player2_id"):
+                await self.db.matches.update_one(
+                    {"tournament_id": tid, "match_id": next_match_id, "status": "waiting"},
+                    {"$set": {"status": "scheduled"}},
+                )
+        else:
+            tournament = await self.db.tournaments.find_one({"_id": tid}, {"format": 1})
+            if tournament and tournament.get("format") == "knockout":
+                await self.db.tournaments.update_one(
+                    {"_id": tid},
+                    {"$set": {"status": "completed", "is_active": False, "winner_id": int(winner_id), "winner_name": winner_name}},
+                )
+        return "result_saved"
