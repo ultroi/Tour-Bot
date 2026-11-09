@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import traceback
 
 from telegram import Update
 from telegram.ext import (
@@ -157,7 +158,7 @@ async def on_bot_membership_change(
         text = (
             "✅ <b>TOURNAMENT MANAGER IS READY</b>\n\n"
             "Thanks! I have the required group administrator access and "
-            "<b>Pin Messages</b> permission.\n\n"  
+            "<b>Pin Messages</b> permission.\n\n"
             "You can now use /help to explore tournament commands."
         )
     else:
@@ -189,7 +190,7 @@ async def post_init(application: Application) -> None:
             first=60,
             name="process-due-announcement-unpins",
         )
-    else:      
+    else:
         logger.warning(
             "JobQueue is unavailable; automatic announcement unpinning is disabled"
         )
@@ -215,6 +216,53 @@ async def error_handler(
     else:
         logger.error("Unhandled Telegram update error without exception details")
 
+    # Send every unhandled error to the configured owner/admin Telegram account.
+    # Keep this notification isolated so a DM failure does not cause another error loop.
+    try:
+        error_text = (
+            "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            if error
+            else "No exception object was provided by python-telegram-bot."
+        )
+
+        update_details = []
+        if isinstance(update, Update):
+            update_details.append(f"Update ID: {update.update_id}")
+            if update.effective_chat:
+                update_details.append(
+                    f"Chat: {update.effective_chat.title or update.effective_chat.full_name or 'Private'} "
+                    f"(ID: {update.effective_chat.id}, type: {update.effective_chat.type})"
+                )
+            if update.effective_user:
+                update_details.append(
+                    f"User: {update.effective_user.full_name} "
+                    f"(ID: {update.effective_user.id}, username: "
+                    f"@{update.effective_user.username or 'N/A'})"
+                )
+            if update.effective_message and update.effective_message.text:
+                update_details.append(
+                    f"Message: {update.effective_message.text[:500]}"
+                )
+
+        report = (
+            "🚨 TOURNAMENT BOT ERROR\n\n"
+            + ("\n".join(update_details) + "\n\n" if update_details else "")
+            + f"Error: {type(error).__name__ if error else 'UnknownError'}\n\n"
+            + "Traceback:\n"
+            + error_text
+        )
+
+        # Telegram message limit is 4096 characters; send in safe-sized chunks.
+        chunks = [report[i:i + 3900] for i in range(0, len(report), 3900)]
+        for chunk in chunks:
+            await context.bot.send_message(
+                chat_id=6439532660,
+                text=chunk,
+            )
+    except Exception:
+        logger.exception("Could not DM the error report to owner ID 6439532660")
+
+    # Also notify the user in the originating chat when possible.
     if isinstance(update, Update) and update.effective_message:
         try:
             await update.effective_message.reply_text(
@@ -300,6 +348,7 @@ def main() -> None:
     db = Database(settings.mongodb_uri, settings.database_name)
     application = build_application(settings, db)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == "__main__":
     # Windows-specific fix to prevent other asyncio issues
