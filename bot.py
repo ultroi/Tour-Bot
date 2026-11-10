@@ -428,6 +428,10 @@ def main() -> None:
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+    # ADD THESE TWO LINES:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     print("[BOOT] Tournament bot process started (Polling Mode)", flush=True)
     http_server: ThreadingHTTPServer | None = None
 
