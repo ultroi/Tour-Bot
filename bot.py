@@ -7,11 +7,12 @@ the current tournament announcement workflow.
 from __future__ import annotations
 
 import os
-from urllib.parse import urlparse
 import logging
 import sys
 import traceback
 import asyncio
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -37,6 +38,33 @@ logging.basicConfig(
     force=True,
 )
 logger = logging.getLogger(__name__)
+
+
+# StackHost can probe this endpoint without interfering with Telegram polling.
+# The endpoint stays unhealthy until MongoDB and Telegram initialization finish.
+_HEALTH_READY = threading.Event()
+
+
+class HealthRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
+        path = self.path.split("?", 1)[0]
+        if path not in {"/", "/health", "/ready"}:
+            self.send_error(404)
+            return
+
+        ready = _HEALTH_READY.is_set()
+        body = b"ok\n" if ready else b"starting\n"
+        self.send_response(200 if ready else 503)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        # Avoid noisy health-check access logs.
+        return
+
 
 GROUP_TYPES = {"group", "supergroup"}
 
@@ -197,10 +225,20 @@ async def on_bot_membership_change(
 
 
 async def post_init(application: Application) -> None:
+    _HEALTH_READY.clear()
     print("[BOOT] Connecting to MongoDB...", flush=True)
 
     db: Database = application.bot_data["db"]
-    await db.connect()
+    try:
+        await db.connect()
+    except Exception as exc:
+        logger.exception("MongoDB connection failed during startup")
+        raise RuntimeError(
+            "MongoDB connection failed. Check the deployed MONGODB_URI (or the "
+            "environment variable read by Settings), Atlas Database Access "
+            "username/password, password URL-encoding, and the authentication "
+            "database. Do not use your Atlas website login credentials."
+        ) from exc
 
     print("[BOOT] MongoDB connected!", flush=True)
 
@@ -211,6 +249,9 @@ async def post_init(application: Application) -> None:
         flush=True
     )
     logger.info("Tournament Manager Bot started as @%s", bot.username)
+
+    # Mark the deployment healthy only when both required services are available.
+    _HEALTH_READY.set()
 
     if application.job_queue:
         # Due times are stored in MongoDB, so pending unpins survive restarts.
@@ -227,10 +268,14 @@ async def post_init(application: Application) -> None:
 
 
 async def post_shutdown(application: Application) -> None:
+    _HEALTH_READY.clear()
     db: Database | None = application.bot_data.get("db")
     if db:
-        await db.close()
-        logger.info("MongoDB connection closed")
+        try:
+            await db.close()
+            logger.info("MongoDB connection closed")
+        except Exception:
+            logger.exception("Error while closing MongoDB connection")
 
 
 async def error_handler(
@@ -379,48 +424,33 @@ def build_application(settings: Settings, db: Database) -> Application:
 
 
 def main() -> None:
-    # --- FIX FOR PYTHON 3.12+ & WINDOWS ---
+    # Use a selector loop on Windows for compatibility with some async libraries.
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    # --------------------------------------
 
-    print("[BOOT] Tournament bot process started (Hybrid Polling Mode)", flush=True)
+    print("[BOOT] Tournament bot process started (Polling Mode)", flush=True)
+    http_server: ThreadingHTTPServer | None = None
 
     try:
-        import os
         print("[BOOT] Loading configuration...", flush=True)
         settings = Settings.from_env()
         print("[BOOT] Configuration loaded", flush=True)
 
-        # =========================================================
-        # FAKE WEB SERVER: StackHost ko zinda dikhane ke liye
-        # =========================================================
+        # Run the health server in its own thread. It does not share or block
+        # python-telegram-bot's asyncio event loop.
         port = int(os.getenv("PORT", "8080"))
-        
-        async def handle_client(reader, writer):
-            try:
-                # StackHost jab ping karega toh hum usko 200 OK bolenge
-                request = await asyncio.wait_for(reader.read(1024), timeout=2.0)
-                response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nBot is alive!"
-                writer.write(response.encode('utf8'))
-                await writer.drain()
-            except Exception:
-                pass
-            finally:
-                writer.close()
+        if not 1 <= port <= 65535:
+            raise ValueError(f"PORT must be between 1 and 65535; received {port}")
 
-        async def start_dummy_server():
-            server = await asyncio.start_server(handle_client, '0.0.0.0', port)
-            print(f"[BOOT] Dummy health-check server listening on port {port}", flush=True)
-            async with server:
-                await server.serve_forever()
-        
-        # Is dummy server ko background task me start kar do
-        loop.create_task(start_dummy_server())
-        # =========================================================
+        http_server = ThreadingHTTPServer(("0.0.0.0", port), HealthRequestHandler)
+        http_server.daemon_threads = True
+        health_thread = threading.Thread(
+            target=http_server.serve_forever,
+            name="health-check-server",
+            daemon=True,
+        )
+        health_thread.start()
+        print(f"[BOOT] Health endpoint listening on 0.0.0.0:{port}", flush=True)
 
         print("[BOOT] Initializing database...", flush=True)
         db = Database(settings.mongodb_uri, settings.database_name)
@@ -428,14 +458,23 @@ def main() -> None:
         print("[BOOT] Building Telegram application...", flush=True)
         application = build_application(settings, db)
 
-        # Polling start karte hi PTB automatically purane stuck webhooks delete kar deta hai!
-        print("[BOOT] Starting in POLLING mode (Bypassing Proxies)...", flush=True)
+        print("[BOOT] Starting Telegram polling...", flush=True)
         application.run_polling(allowed_updates=Update.ALL_TYPES)
 
     except Exception:
-        import traceback
-        traceback.print_exc(file=sys.stdout)
+        _HEALTH_READY.clear()
+        logger.exception("Bot process failed")
         raise
+    finally:
+        _HEALTH_READY.clear()
+        if http_server is not None:
+            try:
+                http_server.shutdown()
+                http_server.server_close()
+                print("[BOOT] Health server stopped", flush=True)
+            except Exception:
+                logger.exception("Could not stop health-check server")
+
 
 if __name__ == "__main__":
     main()
