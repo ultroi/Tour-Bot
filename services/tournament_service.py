@@ -228,7 +228,11 @@ class TournamentService:
         return "not_registered"
 
     async def get_participants(self, tournament_id: str) -> list[dict[str, Any]]:
-        cursor = self.db.registrations.find({"tournament_id": tournament_id.upper(), "eliminated": {"$ne": True}}).sort("registered_at", ASCENDING)
+        cursor = self.db.registrations.find({
+            "tournament_id": tournament_id.upper(),
+            "eliminated": {"$ne": True},
+            "disqualified": {"$ne": True},
+        }).sort("registered_at", ASCENDING)
         registrations = await cursor.to_list(length=512)
         return [
             {"user_id": item["user_id"], "name": item["name"], "username": item.get("username")}
@@ -406,7 +410,7 @@ class TournamentService:
         )
         if not registration:
             return "participant_not_found", None
-        if registration.get("eliminated"):
+        if registration.get("eliminated") or registration.get("disqualified"):
             return "already_eliminated", None
 
         if match.get("status") == "scheduled":
@@ -457,3 +461,76 @@ class TournamentService:
             "loser_name": registration.get("name") or "Player",
         }
         return "eliminated", details
+
+
+    async def disqualify_round_robin(
+        self,
+        tournament_id: str,
+        user_id: int,
+        disqualified_by: int | None = None,
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Disqualify a round-robin participant without deleting tournament history.
+
+        Pending fixtures involving the player are cancelled. Completed results are
+        retained in match history, but standings are recalculated from active
+        participants, so all results involving the disqualified player are excluded.
+        """
+        tid = tournament_id.upper()
+        tournament = await self.db.tournaments.find_one({"_id": tid})
+        if not tournament:
+            return "tournament_not_found", None
+        if tournament.get("format") != "round_robin":
+            return "not_round_robin", None
+        if not tournament.get("fixtures_generated"):
+            return "fixtures_not_generated", None
+
+        player_id = int(user_id)
+        registration = await self.db.registrations.find_one(
+            {"tournament_id": tid, "user_id": player_id}
+        )
+        if not registration:
+            return "participant_not_found", None
+        if registration.get("disqualified") or registration.get("eliminated"):
+            return "already_disqualified", None
+
+        disqualified_at = utc_now()
+        update = await self.db.registrations.update_one(
+            {
+                "tournament_id": tid,
+                "user_id": player_id,
+                "disqualified": {"$ne": True},
+                "eliminated": {"$ne": True},
+            },
+            {"$set": {
+                "disqualified": True,
+                "disqualified_at": disqualified_at,
+                "disqualified_by": int(disqualified_by) if disqualified_by is not None else None,
+            }},
+        )
+        if not update.modified_count:
+            return "already_disqualified", None
+
+        # Do not award automatic wins/points to opponents: pending games are void.
+        cancelled = await self.db.matches.update_many(
+            {
+                "tournament_id": tid,
+                "status": {"$in": ["scheduled", "bye"]},
+                "$or": [{"player1_id": player_id}, {"player2_id": player_id}],
+            },
+            {"$set": {
+                "status": "cancelled",
+                "disqualified_id": player_id,
+                "disqualified_name": registration.get("name") or "Player",
+                "cancelled_reason": "player_disqualified",
+                "cancelled_at": disqualified_at,
+            }},
+        )
+        await self.db.tournaments.update_one(
+            {"_id": tid, "registered_count": {"$gt": 0}},
+            {"$inc": {"registered_count": -1}},
+        )
+        return "disqualified", {
+            "user_id": player_id,
+            "name": registration.get("name") or "Player",
+            "cancelled_matches": int(cancelled.modified_count),
+        }

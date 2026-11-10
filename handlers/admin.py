@@ -344,12 +344,43 @@ async def eliminate_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "Usage:\n"
             "• Reply to the losing player's message with /eleminate\n"
             "• /eleminate MATCH_ID LOSER_USER_ID\n"
-            "• /eleminate LOSER_USER_ID (when they have one scheduled match)\n\n"
+            "• /eleminate LOSER_USER_ID\n\n"
+            "Knockout: specify MATCH_ID when needed. Round robin: this disqualifies the player and cancels their pending fixtures.\n"
             "Use /adminparticipants to see player IDs."
         )
         return
 
     service = context.application.bot_data["tournament_service"]
+    if tournament.get("format") == "round_robin":
+        if match_id:
+            await update.effective_message.reply_text(
+                "For round-robin disqualification, use /eleminate USER_ID or reply to the player's message with /eleminate."
+            )
+            return
+        result, details = await service.disqualify_round_robin(
+            tournament["_id"], loser_id, disqualified_by=update.effective_user.id
+        )
+        rr_messages = {
+            "tournament_not_found": "Tournament not found.",
+            "not_round_robin": "This command is not available for this tournament format.",
+            "fixtures_not_generated": "Generate fixtures before disqualifying a round-robin participant.",
+            "participant_not_found": "That player is not in this tournament's participant list.",
+            "already_disqualified": "That player has already been disqualified.",
+        }
+        if result != "disqualified" or not details:
+            await update.effective_message.reply_text(rr_messages.get(result, "Could not disqualify that player."))
+            return
+        cancelled = details["cancelled_matches"]
+        await update.effective_message.reply_text(
+            "🚫 <b>PLAYER DISQUALIFIED</b>\n\n"
+            f"Player: {user_link(details['user_id'], details['name'])}\n"
+            f"Pending fixtures cancelled: <b>{cancelled}</b>\n\n"
+            "The player has been removed from active participants. Their completed match records are retained, "
+            "but results involving them are excluded from the standings. Cancelled fixtures award no points.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
     result, details = await service.eliminate(
         tournament["_id"],
         loser_id,

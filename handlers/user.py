@@ -124,7 +124,7 @@ HELP_TEXTS = {
         "⚔️ <b>MATCH MANAGEMENT</b>\n"
         "/generatefixtures — Generate match schedule.\n"
         "/setresult MATCH_ID WINNER_USER_ID\n"
-        "/eleminate — Reply to the losing player to eliminate them and advance the opponent.\n"
+        "/eleminate — Knockout: eliminate a loser and advance the opponent. Round robin: disqualify a player.\n"
         "/adminparticipants — View active participant IDs.\n\n"
         "📢 <b>ANNOUNCEMENTS</b>\n"
         "/announce Message...\n"
