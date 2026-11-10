@@ -228,7 +228,7 @@ class TournamentService:
         return "not_registered"
 
     async def get_participants(self, tournament_id: str) -> list[dict[str, Any]]:
-        cursor = self.db.registrations.find({"tournament_id": tournament_id.upper()}).sort("registered_at", ASCENDING)
+        cursor = self.db.registrations.find({"tournament_id": tournament_id.upper(), "eliminated": {"$ne": True}}).sort("registered_at", ASCENDING)
         registrations = await cursor.to_list(length=512)
         return [
             {"user_id": item["user_id"], "name": item["name"], "username": item.get("username")}
@@ -273,30 +273,49 @@ class TournamentService:
         cursor = self.db.matches.find({"tournament_id": tournament_id.upper()}).sort([("round", ASCENDING), ("match_no", ASCENDING)])
         return await cursor.to_list(length=2048)
 
-    async def set_result(self, tournament_id: str, match_id: str, winner_id: int) -> str:
-        tid = tournament_id.upper()
-        match = await self.db.matches.find_one({"tournament_id": tid, "match_id": match_id.upper()})
-        if not match:
-            return "match_not_found"
-        if match["status"] != "scheduled":
+    async def _save_match_winner(
+        self,
+        tournament_id: str,
+        match: dict[str, Any],
+        winner_id: int,
+        *,
+        eliminated_loser: bool = False,
+    ) -> str:
+        """Complete a scheduled match and move its winner to the next bracket slot."""
+        if match.get("status") != "scheduled":
             return "match_not_ready"
-        if int(winner_id) not in {match.get("player1_id"), match.get("player2_id")}:
+        winner_id = int(winner_id)
+        player_ids = {match.get("player1_id"), match.get("player2_id")}
+        if winner_id not in player_ids:
             return "winner_not_in_match"
 
-        winner_name = match["player1_name"] if winner_id == match["player1_id"] else match["player2_name"]
+        winner_slot = 1 if winner_id == match.get("player1_id") else 2
+        loser_slot = 2 if winner_slot == 1 else 1
+        winner_name = match.get(f"player{winner_slot}_name") or "Player"
+        update_fields: dict[str, Any] = {
+            "status": "completed",
+            "winner_id": winner_id,
+            "winner_name": winner_name,
+            "completed_at": utc_now(),
+        }
+        if eliminated_loser:
+            update_fields["eliminated_id"] = match.get(f"player{loser_slot}_id")
+            update_fields["eliminated_name"] = match.get(f"player{loser_slot}_name") or "Player"
+
         updated = await self.db.matches.update_one(
             {"_id": match["_id"], "status": "scheduled"},
-            {"$set": {"status": "completed", "winner_id": int(winner_id), "winner_name": winner_name, "completed_at": utc_now()}},
+            {"$set": update_fields},
         )
         if not updated.modified_count:
             return "match_not_ready"
 
+        tid = tournament_id.upper()
         next_match_id = match.get("next_match_id")
         if next_match_id:
             next_slot = int(match["next_slot"])
             await self.db.matches.update_one(
                 {"tournament_id": tid, "match_id": next_match_id},
-                {"$set": {f"player{next_slot}_id": int(winner_id), f"player{next_slot}_name": winner_name}},
+                {"$set": {f"player{next_slot}_id": winner_id, f"player{next_slot}_name": winner_name}},
             )
             next_match = await self.db.matches.find_one({"tournament_id": tid, "match_id": next_match_id})
             if next_match and next_match.get("player1_id") and next_match.get("player2_id"):
@@ -309,6 +328,132 @@ class TournamentService:
             if tournament and tournament.get("format") == "knockout":
                 await self.db.tournaments.update_one(
                     {"_id": tid},
-                    {"$set": {"status": "completed", "is_active": False, "winner_id": int(winner_id), "winner_name": winner_name}},
+                    {"$set": {"status": "completed", "is_active": False, "winner_id": winner_id, "winner_name": winner_name}},
                 )
         return "result_saved"
+
+    async def set_result(self, tournament_id: str, match_id: str, winner_id: int) -> str:
+        tid = tournament_id.upper()
+        match = await self.db.matches.find_one({"tournament_id": tid, "match_id": match_id.upper()})
+        if not match:
+            return "match_not_found"
+        if match.get("status") != "scheduled":
+            return "match_not_ready"
+        return await self._save_match_winner(tid, match, winner_id)
+
+    async def eliminate(
+        self,
+        tournament_id: str,
+        loser_id: int,
+        match_id: str | None = None,
+        eliminated_by: int | None = None,
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Eliminate a knockout loser, advance the opponent, and hide the loser from active rosters.
+
+        Registration records are retained for history; the eliminated flag removes the
+        player from active participant lists without erasing their match history. The
+        command can also mark a loser after a manager has already saved the match result.
+        """
+        tid = tournament_id.upper()
+        tournament = await self.db.tournaments.find_one({"_id": tid})
+        if not tournament:
+            return "tournament_not_found", None
+        if tournament.get("format") != "knockout":
+            return "not_knockout", None
+
+        loser_id = int(loser_id)
+        if match_id:
+            match = await self.db.matches.find_one(
+                {"tournament_id": tid, "match_id": match_id.upper()}
+            )
+            if not match:
+                return "match_not_found", None
+        else:
+            # Prefer a live scheduled match. If /setresult was already used, fall
+            # back to a completed match where this player was recorded as the loser.
+            candidates = await self.db.matches.find(
+                {
+                    "tournament_id": tid,
+                    "status": "scheduled",
+                    "$or": [{"player1_id": loser_id}, {"player2_id": loser_id}],
+                }
+            ).to_list(length=2)
+            if len(candidates) > 1:
+                return "multiple_matches", None
+            if candidates:
+                match = candidates[0]
+            else:
+                candidates = await self.db.matches.find(
+                    {
+                        "tournament_id": tid,
+                        "status": "completed",
+                        "winner_id": {"$ne": loser_id},
+                        "$or": [{"player1_id": loser_id}, {"player2_id": loser_id}],
+                    }
+                ).to_list(length=2)
+                if not candidates:
+                    return "match_not_found", None
+                if len(candidates) > 1:
+                    return "multiple_matches", None
+                match = candidates[0]
+
+        player1_id, player2_id = match.get("player1_id"), match.get("player2_id")
+        if loser_id not in {player1_id, player2_id}:
+            return "loser_not_in_match", None
+
+        registration = await self.db.registrations.find_one(
+            {"tournament_id": tid, "user_id": loser_id}
+        )
+        if not registration:
+            return "participant_not_found", None
+        if registration.get("eliminated"):
+            return "already_eliminated", None
+
+        if match.get("status") == "scheduled":
+            winner_id = player2_id if loser_id == player1_id else player1_id
+            result = await self._save_match_winner(
+                tid, match, int(winner_id), eliminated_loser=True
+            )
+            if result != "result_saved":
+                return result, None
+        elif match.get("status") == "completed":
+            # A normal /setresult may already have advanced the winner. Do not
+            # complete or advance this match a second time.
+            winner_id = match.get("winner_id")
+            if winner_id not in {player1_id, player2_id} or winner_id == loser_id:
+                return "match_not_ready", None
+            loser_slot = 1 if loser_id == player1_id else 2
+            await self.db.matches.update_one(
+                {"_id": match["_id"], "status": "completed", "winner_id": winner_id},
+                {"$set": {
+                    "eliminated_id": loser_id,
+                    "eliminated_name": match.get(f"player{loser_slot}_name") or registration.get("name") or "Player",
+                }},
+            )
+        else:
+            return "match_not_ready", None
+
+        eliminated_at = utc_now()
+        elimination_update = await self.db.registrations.update_one(
+            {"tournament_id": tid, "user_id": loser_id, "eliminated": {"$ne": True}},
+            {"$set": {
+                "eliminated": True,
+                "eliminated_at": eliminated_at,
+                "eliminated_by": int(eliminated_by) if eliminated_by is not None else None,
+            }},
+        )
+        if elimination_update.modified_count:
+            await self.db.tournaments.update_one(
+                {"_id": tid, "registered_count": {"$gt": 0}},
+                {"$inc": {"registered_count": -1}},
+            )
+
+        winner_slot = 1 if winner_id == player1_id else 2
+        details = {
+            "match_id": match["match_id"],
+            "winner_id": int(winner_id),
+            "winner_name": match.get(f"player{winner_slot}_name") or "Player",
+            "loser_id": loser_id,
+            "loser_name": registration.get("name") or "Player",
+        }
+        return "eliminated", details

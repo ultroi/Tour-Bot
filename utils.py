@@ -117,6 +117,10 @@ def match_line(match: dict[str, Any]) -> str:
         return f"<code>{match_id}</code>: {first} — BYE (advances)"
     if status == "completed":
         winner = user_link(match.get("winner_id"), match.get("winner_name", "Unknown"))
+        eliminated_id = match.get("eliminated_id")
+        if eliminated_id is not None:
+            eliminated = user_link(eliminated_id, match.get("eliminated_name", "Player"))
+            return f"<code>{match_id}</code>: {first} vs {second} — Winner: {winner} ✅ — Eliminated: {eliminated} ❌"
         return f"<code>{match_id}</code>: {first} vs {second} — Winner: {winner} ✅"
     if status == "waiting":
         return f"<code>{match_id}</code>: {first} vs {second} — Waiting for previous results"

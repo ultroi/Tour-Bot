@@ -404,6 +404,7 @@ def build_application(settings: Settings, db: Database) -> Application:
     application.add_handler(CommandHandler("complete", admin.set_tournament_status))
     application.add_handler(CommandHandler("generatefixtures", admin.generate_fixtures))
     application.add_handler(CommandHandler("setresult", admin.set_result))
+    application.add_handler(CommandHandler("eleminate", admin.eliminate_player))
     application.add_handler(CommandHandler("announce", admin.announce))
     application.add_handler(CommandHandler("announceall", admin.announce))
     application.add_handler(

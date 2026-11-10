@@ -124,7 +124,8 @@ HELP_TEXTS = {
         "⚔️ <b>MATCH MANAGEMENT</b>\n"
         "/generatefixtures — Generate match schedule.\n"
         "/setresult MATCH_ID WINNER_USER_ID\n"
-        "/adminparticipants — View participant IDs.\n\n"
+        "/eleminate — Reply to the losing player to eliminate them and advance the opponent.\n"
+        "/adminparticipants — View active participant IDs.\n\n"
         "📢 <b>ANNOUNCEMENTS</b>\n"
         "/announce Message...\n"
         "/unpinannouncement — Unpin latest announcement.\n\n"
@@ -331,8 +332,9 @@ async def my_registrations(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         tournament = await db.tournaments.find_one({"_id": registration["tournament_id"]})
         title = tournament["name"] if tournament else "Deleted tournament"
         group_title = tournament.get("group_title", "Group") if tournament else "Group"
+        status = " — ❌ ELIMINATED" if registration.get("eliminated") else ""
         lines.append(
-            f"• {html.escape(title)} — {html.escape(group_title)} — {user_link(user_id, registration['name'])}"
+            f"• {html.escape(title)} — {html.escape(group_title)} — {user_link(user_id, registration['name'])}{status}"
         )
     await reply_html_chunks(update.effective_message, lines)
 

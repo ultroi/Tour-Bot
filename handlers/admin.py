@@ -310,6 +310,84 @@ async def set_result(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             )
 
 
+async def eliminate_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Eliminate a knockout loser by replying to them or providing IDs."""
+    tournament = await _require_tournament_access(update, context)
+    if not tournament:
+        return
+
+    parts = (update.effective_message.text or "").split()
+    reply = update.effective_message.reply_to_message
+    replied_user = (
+        reply.from_user
+        if reply and reply.from_user and not reply.from_user.is_bot
+        else None
+    )
+
+    match_id: str | None = None
+    loser_id: int | None = None
+    if len(parts) == 1 and replied_user:
+        # Reply to the losing player's message with /eleminate.
+        loser_id = replied_user.id
+    elif len(parts) == 2 and replied_user:
+        # Optional explicit match ID while still replying to the loser.
+        match_id = parts[1]
+        loser_id = replied_user.id
+    elif len(parts) == 2 and parts[1].isdigit():
+        # Locate the one scheduled knockout match containing this player.
+        loser_id = int(parts[1])
+    elif len(parts) == 3 and parts[2].isdigit():
+        match_id = parts[1]
+        loser_id = int(parts[2])
+    else:
+        await update.effective_message.reply_text(
+            "Usage:\n"
+            "• Reply to the losing player's message with /eleminate\n"
+            "• /eleminate MATCH_ID LOSER_USER_ID\n"
+            "• /eleminate LOSER_USER_ID (when they have one scheduled match)\n\n"
+            "Use /adminparticipants to see player IDs."
+        )
+        return
+
+    service = context.application.bot_data["tournament_service"]
+    result, details = await service.eliminate(
+        tournament["_id"],
+        loser_id,
+        match_id=match_id,
+        eliminated_by=update.effective_user.id,
+    )
+    messages = {
+        "tournament_not_found": "Tournament not found.",
+        "not_knockout": "/eleminate is available only for knockout tournaments.",
+        "match_not_found": "No scheduled match was found for that player. Check the match ID or player ID.",
+        "multiple_matches": "This player appears in more than one scheduled match. Use /eleminate MATCH_ID LOSER_USER_ID.",
+        "match_not_ready": "This match is not scheduled or has already been completed.",
+        "loser_not_in_match": "The specified losing player is not part of that match.",
+        "participant_not_found": "That player is not in this tournament's participant list.",
+        "already_eliminated": "That player has already been eliminated.",
+        "winner_not_in_match": "The opponent could not be identified as the match winner.",
+    }
+    if result != "eliminated" or not details:
+        await update.effective_message.reply_text(messages.get(result, "Could not eliminate that player."))
+        return
+
+    await update.effective_message.reply_text(
+        "❌ <b>PLAYER ELIMINATED</b>\n\n"
+        f"Eliminated: {user_link(details['loser_id'], details['loser_name'])}\n"
+        f"✅ Advanced: {user_link(details['winner_id'], details['winner_name'])}\n"
+        f"Match: <code>{html.escape(details['match_id'])}</code>\n\n"
+        "The winner has been moved to the next round and the eliminated player has been removed from the active participant list.",
+        parse_mode=ParseMode.HTML,
+    )
+
+    refreshed = await service.get_tournament(tournament["_id"])
+    if refreshed and refreshed.get("status") == "completed":
+        await update.effective_message.reply_text(
+            f"🏆 Tournament complete! Winner: {user_link(details['winner_id'], details['winner_name'])}",
+            parse_mode=ParseMode.HTML,
+        )
+
+
 async def process_due_unpins(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Persistently process announcement unpins, including after bot restarts."""
     db = context.application.bot_data["db"]
