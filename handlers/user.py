@@ -9,10 +9,17 @@ from telegram.ext import ContextTypes, CallbackQueryHandler
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
-
 from utils import (
-    ensure_group, ensure_private_user, is_group_chat, match_line,
-    reply_html_chunks, tournament_summary, user_link,
+    ensure_group,
+    ensure_private_user,
+    has_custom_rules,
+    is_group_chat,
+    match_line,
+    refresh_tournament_announcement,
+    reply_html_chunks,
+    tournament_deep_link,
+    tournament_summary,
+    user_link,
 )
 import logging
 
@@ -21,21 +28,64 @@ import logging
 logger = logging.getLogger(__name__)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Start the private bot chat and process tournament deep-link actions."""
     try:
         await ensure_private_user(update, context)
     except Exception:
         logger.exception("Could not save private user to MongoDB")
 
-    await update.effective_message.reply_text(
-        "Welcome to Tournament Manager! 🏆\n\n"
-        "Add me to your Telegram group and make me an admin "
-        "with permission to pin messages.\n"
-        "A group admin can create one tournament in that group. "
-        "The creator becomes its tournament manager.\n\n"
-        "Use /help to see all commands. "
-        "Registration is available only inside the tournament group."
-    )
+    message = update.effective_message
+    user = update.effective_user
+    payload = context.args[0].strip() if context.args else ""
+    service = context.application.bot_data["tournament_service"]
 
+    # Deep link launched from the pinned tournament card. Telegram delivers this
+    # payload only after the user presses Start in the bot's private chat.
+    if payload.startswith("treg_"):
+        try:
+            _, group_id_text, tournament_id = payload.split("_", 2)
+            group_id = int(group_id_text)
+            tournament_id = tournament_id.upper()
+        except (ValueError, TypeError):
+            await message.reply_text("That registration link is invalid. Please use the Register button in the tournament group.")
+            return
+
+        tournament = await service.get_tournament(tournament_id)
+        if not tournament or int(tournament.get("group_id", 0)) != group_id:
+            await message.reply_text("This tournament registration link is no longer valid.")
+            return
+        if not await _is_tournament_group_member(context, group_id, user.id):
+            await message.reply_text(
+                "Please join the tournament group first, then tap the Register button again."
+            )
+            return
+        result = await service.register(
+            tournament_id, group_id, user.id, user.first_name, user.username
+        )
+        await message.reply_text(_registration_result_text(result, tournament, user), parse_mode=ParseMode.HTML)
+        await refresh_tournament_announcement(context, tournament_id)
+        return
+
+    if payload.startswith("trules_"):
+        tournament_id = payload.removeprefix("trules_").strip().upper()
+        tournament = await service.get_tournament(tournament_id)
+        if not tournament:
+            await message.reply_text("This tournament could not be found.")
+            return
+        if not has_custom_rules(tournament):
+            await message.reply_text("The tournament manager has not published the rules yet.")
+            return
+        await _send_tournament_rules(message, tournament)
+        return
+
+    await message.reply_text(
+        "🏆 Welcome to Tournament Manager!\n\n"
+        "Open the tournament group and tap <b>Register in DM</b> on the pinned tournament post.\n"
+        "Press <b>Start</b> here and I will complete your registration automatically.\n\n"
+        "Use /tournaments to browse tournaments, /myreg to view your registrations, "
+        "and /help to see all commands.",
+        parse_mode=ParseMode.HTML,
+    )
 
 
 

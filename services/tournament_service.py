@@ -12,7 +12,7 @@ from database import Database
 from services.fixture_service import generate_fixtures
 
 VALID_FORMATS = {"knockout", "round_robin"}
-VALID_STATUSES = {"open", "closed", "ongoing", "completed"}
+VALID_STATUSES = {"open", "closed", "ongoing", "completed", "cancelled"}
 
 
 def utc_now() -> datetime:
@@ -37,8 +37,8 @@ class TournamentService:
         normalized_format = tournament_format.strip().lower().replace("-", "_")
         if normalized_format not in VALID_FORMATS:
             raise ValueError("Format must be `knockout` or `round_robin`.")
-        if not 2 <= capacity <= 512:
-            raise ValueError("Maximum participants must be between 2 and 512.")
+        if capacity < 0 or capacity > 512 or (capacity != 0 and capacity < 2):
+            raise ValueError("Capacity must be 0 (unlimited) or a number between 2 and 512.")
         clean_name = name.strip()
         if not 3 <= len(clean_name) <= 80:
             raise ValueError("Tournament name must be between 3 and 80 characters.")
@@ -55,7 +55,8 @@ class TournamentService:
             "capacity": capacity,
             "registered_count": 0,
             "status": "open",
-            "rules": "Rules have not been added yet. The tournament manager will update them soon.",
+            # Empty means rules have not been configured; this controls the Rules button.
+            "rules": "",
             "group_id": int(group_id),
             "group_title": group_title,
             "manager_id": int(manager_id),
@@ -68,6 +69,9 @@ class TournamentService:
             "is_active": True,
             "last_announcement_message_id": None,
             "announcement_pin_until": None,
+            "tournament_message_id": None,
+            "tournament_message_chat_id": int(group_id),
+            "tournament_message_pinned": False,
         }
         try:
             await self.db.tournaments.insert_one(document)
@@ -115,7 +119,7 @@ class TournamentService:
     async def set_status(self, tournament_id: str, status: str) -> bool:
         normalized = status.strip().lower()
         if normalized not in VALID_STATUSES:
-            raise ValueError("Status must be open, closed, ongoing, or completed.")
+            raise ValueError("Status must be open, closed, ongoing, completed, or cancelled.")
         tournament = await self.get_tournament(tournament_id)
         if not tournament:
             return False
@@ -123,7 +127,7 @@ class TournamentService:
             raise ValueError("Registration status cannot be changed after fixture generation has started.")
         if normalized == "ongoing" and not tournament.get("fixtures_generated"):
             raise ValueError("Generate fixtures before marking a tournament as ongoing.")
-        update = {"status": normalized, "is_active": normalized != "completed"}
+        update = {"status": normalized, "is_active": normalized not in {"completed", "cancelled"}}
         result = await self.db.tournaments.update_one({"_id": tournament["_id"]}, {"$set": update})
         return result.matched_count > 0
 
@@ -181,7 +185,13 @@ class TournamentService:
                 "group_id": int(group_id),
                 "status": "open",
                 "is_active": True,
-                "$expr": {"$lt": ["$registered_count", "$capacity"]},
+                # A capacity of zero is the persisted representation of unlimited.
+                "$expr": {
+                    "$or": [
+                        {"$lte": [{"$ifNull": ["$capacity", 0]}, 0]},
+                        {"$lt": [{"$ifNull": ["$registered_count", 0]}, "$capacity"]},
+                    ]
+                },
             },
             {"$inc": {"registered_count": 1}},
             return_document=ReturnDocument.AFTER,

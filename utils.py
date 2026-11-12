@@ -1,12 +1,17 @@
-"""Formatting and Telegram helpers."""
+"""Formatting and Telegram helpers for the tournament bot."""
 from __future__ import annotations
 
 import html
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import ContextTypes
+
+logger = logging.getLogger(__name__)
 
 
 def is_admin(user_id: int, admin_ids: frozenset[int]) -> bool:
@@ -24,6 +29,30 @@ def user_link(user_id: int | None, name: str | None) -> str:
     if user_id is None:
         return safe_name
     return f'<a href="tg://user?id={int(user_id)}">{safe_name}</a>'
+
+
+def capacity_label(tournament: dict[str, Any]) -> str:
+    """Render zero/None capacity as unlimited, never as a 0-player limit."""
+    raw_capacity = tournament.get("capacity", 0)
+    try:
+        capacity = int(raw_capacity or 0)
+    except (TypeError, ValueError):
+        return "Unlimited" if str(raw_capacity).strip().lower() in {"none", "unlimited", "infinite"} else str(raw_capacity)
+    return "Unlimited" if capacity <= 0 else str(capacity)
+
+
+def has_custom_rules(tournament: dict[str, Any]) -> bool:
+    rules = str(tournament.get("rules") or "").strip()
+    if not rules:
+        return False
+    # Hide the legacy placeholder that older records stored as if it were rules.
+    legacy_placeholders = (
+        "rules have not been added yet",
+        "no rules added yet",
+        "the organiser will update them soon",
+        "the tournament manager will update them soon",
+    )
+    return not any(rules.casefold().startswith(prefix) for prefix in legacy_placeholders)
 
 
 async def ensure_private_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -70,20 +99,256 @@ async def ensure_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
 
 def tournament_summary(tournament: dict[str, Any], include_description: bool = True) -> str:
     name = html.escape(tournament["name"])
+    registered = int(tournament.get("registered_count", 0) or 0)
     lines = [
         f"🏆 <b>{name}</b>",
-        f"ID: <code>{html.escape(tournament['_id'])}</code>",
-        f"Group: {html.escape(tournament.get('group_title', 'Unknown group'))}",
-        f"Format: {html.escape(tournament['format'].replace('_', ' ').title())}",
-        f"Status: {html.escape(tournament['status'].replace('_', ' ').title())}",
-        f"Registered: {tournament.get('registered_count', 0)}/{tournament['capacity']}",
+        f"ID: <code>{html.escape(str(tournament['_id']))}</code>",
+        f"Format: {html.escape(str(tournament['format']).replace('_', ' ').title())}",
+        f"Status: {html.escape(str(tournament['status']).replace('_', ' ').title())}",
+        f"Registered: {registered}/{capacity_label(tournament)}",
     ]
     if include_description and tournament.get("description"):
-        description = tournament["description"].strip()
+        description = str(tournament["description"]).strip()
         if len(description) > 400:
             description = description[:397] + "..."
         lines.extend(["", "<b>Description</b>", html.escape(description)])
     return "\n".join(lines)
+
+
+def tournament_deep_link(bot_username: str, payload: str) -> str:
+    """Build a Telegram private-chat deep link. Payloads are kept URL-safe."""
+    username = (bot_username or "").strip().lstrip("@")
+    if not username:
+        raise ValueError("The bot username is not available yet.")
+    safe_payload = payload.strip()
+    if len(safe_payload) > 64 or not all(ch.isalnum() or ch in "_-" for ch in safe_payload):
+        raise ValueError("Invalid Telegram start payload.")
+    return f"https://t.me/{username}?start={safe_payload}"
+
+
+def tournament_announcement_text(tournament: dict[str, Any]) -> str:
+    """Create the single public tournament post that is kept pinned and edited."""
+    name = html.escape(str(tournament.get("name", "Tournament")))
+    tournament_id = html.escape(str(tournament.get("_id", "")))
+    fmt = html.escape(str(tournament.get("format", "knockout")).replace("_", " ").title())
+    status = str(tournament.get("status", "open")).lower()
+    status_labels = {
+        "open": "🟢 OPEN",
+        "closed": "🔴 CLOSED",
+        "generating": "🟠 GENERATING FIXTURES",
+        "ongoing": "⚔️ IN PROGRESS",
+        "completed": "🏆 COMPLETED",
+        "cancelled": "❌ CANCELLED",
+    }
+    registered = int(tournament.get("registered_count", 0) or 0)
+    capacity = capacity_label(tournament)
+    is_full = capacity != "Unlimited" and registered >= int(capacity)
+    if status == "open" and is_full:
+        status_text = "🔴 FULL"
+    else:
+        status_text = status_labels.get(status, html.escape(status.replace("_", " ").upper()))
+    manager = user_link(tournament.get("manager_id"), tournament.get("manager_name", "Tournament Manager"))
+
+    lines = [
+        "🏆 <b>OFFICIAL TOURNAMENT</b>",
+        "━━━━━━━━━━━━━━━━━━",
+        f"<b>{name}</b>",
+        f"🆔 ID: <code>{tournament_id}</code>",
+        f"🎮 Format: <b>{fmt}</b>",
+        f"📊 Registered: <b>{registered} / {html.escape(capacity)}</b>",
+        f"📌 Registration: <b>{status_text}</b>",
+        f"👤 Manager: {manager}",
+    ]
+
+    description = str(tournament.get("description") or "").strip()
+    if description:
+        lines.extend(["", "📝 <b>About this tournament</b>", html.escape(description)])
+
+    if status == "completed" and tournament.get("winner_id"):
+        lines.extend(["", f"🏆 Winner: {user_link(tournament.get('winner_id'), tournament.get('winner_name', 'Champion'))}"])
+
+    if tournament.get("fixtures_generated"):
+        lines.extend(["", "⚔️ Fixtures have been generated. Check <code>/fixtures</code> for the schedule."])
+    elif status == "open" and is_full:
+        lines.extend(["", "Registration is full. No additional entries can be accepted unless the manager reopens places."])
+    elif status == "open":
+        lines.extend(["", "Tap <b>Register in DM</b>, then press <b>Start</b> in the bot chat. Your registration will be completed automatically."])
+    elif status == "closed":
+        lines.extend(["", "Registration is currently paused by the tournament team."])
+    elif status == "cancelled":
+        lines.extend(["", "This tournament has been cancelled."])
+    elif status == "completed":
+        lines.extend(["", "This tournament has been completed. Thank you to everyone who participated!"])
+
+    lines.extend(["", "━━━━━━━━━━━━━━━━━━", "<i>This message updates automatically when tournament details change.</i>"])
+    return "\n".join(lines)
+
+
+def tournament_announcement_keyboard(tournament: dict[str, Any], bot_username: str) -> InlineKeyboardMarkup | None:
+    """Build the public controls. Admin actions are authorized again on callback."""
+    tournament_id = str(tournament["_id"])
+    group_id = int(tournament["group_id"])
+    status = str(tournament.get("status", "open")).lower()
+    is_active = bool(tournament.get("is_active", False))
+    rows: list[list[InlineKeyboardButton]] = []
+
+    registered = int(tournament.get("registered_count", 0) or 0)
+    raw_capacity = tournament.get("capacity", 0)
+    try:
+        capacity = int(raw_capacity or 0)
+    except (TypeError, ValueError):
+        capacity = 0
+    is_full = capacity > 0 and registered >= capacity
+
+    if status == "open" and is_active and not is_full:
+        register_url = tournament_deep_link(bot_username, f"treg_{group_id}_{tournament_id}")
+        rows.append([InlineKeyboardButton("✅ Register Now", callback_data=f"tour:register:{tournament_id}")])
+    elif status == "open" and is_active and is_full:
+        rows.append([InlineKeyboardButton("🔴 Registration Full", callback_data=f"tour:status:{tournament_id}")])
+    elif status in {"closed", "generating", "ongoing"} and is_active:
+        rows.append([InlineKeyboardButton("🔒 Registration Closed", callback_data=f"tour:status:{tournament_id}")])
+
+    if has_custom_rules(tournament):
+        rules_url = tournament_deep_link(bot_username, f"trules_{tournament_id}")
+        rows.append([InlineKeyboardButton("📜 Tournament Rules", url=rules_url)])
+
+    if is_active and status in {"open", "closed"} and not tournament.get("fixtures_generated"):
+        toggle_label = "🔒 Turn Registration OFF" if status == "open" else "🟢 Turn Registration ON"
+        rows.append([InlineKeyboardButton(toggle_label, callback_data=f"tour:toggle:{tournament_id}")])
+
+    if is_active and status not in {"completed", "cancelled"}:
+        rows.append([InlineKeyboardButton("❌ Cancel Tournament", callback_data=f"tour:cancel:{tournament_id}")])
+
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+async def refresh_tournament_announcement(
+    context: ContextTypes.DEFAULT_TYPE,
+    tournament_id: str,
+    *,
+    create_if_missing: bool = False,
+) -> bool:
+    """Create or edit the one tracked tournament post, and ensure it is pinned."""
+    service = context.application.bot_data["tournament_service"]
+    db = context.application.bot_data["db"]
+    tournament = await service.get_tournament(tournament_id)
+    if not tournament:
+        return False
+
+    bot_username = context.application.bot_data.get("bot_username")
+    if not bot_username:
+        me = await context.bot.get_me()
+        bot_username = me.username
+        context.application.bot_data["bot_username"] = bot_username
+    if not bot_username:
+        logger.error("Cannot create tournament deep links: bot username is unavailable")
+        return False
+
+    chat_id = int(tournament["group_id"])
+    message_id = tournament.get("tournament_message_id")
+    text = tournament_announcement_text(tournament)
+    markup = tournament_announcement_keyboard(tournament, bot_username)
+    broken_existing_message = False
+
+    if message_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=int(message_id),
+                text=text,
+                reply_markup=markup,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+        except BadRequest as exc:
+            if "message is not modified" not in str(exc).lower():
+                if "message to edit not found" not in str(exc).lower() and "message can't be edited" not in str(exc).lower():
+                    logger.warning("Could not edit tournament announcement %s: %s", tournament_id, exc)
+                    return False
+                message_id = None
+                broken_existing_message = True
+        except TelegramError:
+            logger.exception("Could not refresh tournament announcement %s", tournament_id)
+            return False
+
+    if not message_id:
+        if not create_if_missing and not broken_existing_message:
+            return False
+        if broken_existing_message:
+            # If the previous post is still present but Telegram no longer lets
+            # the bot edit it, remove its pin before replacing it.
+            old_message_id = tournament.get("tournament_message_id")
+            if old_message_id:
+                try:
+                    await context.bot.unpin_chat_message(
+                        chat_id=chat_id,
+                        message_id=int(old_message_id),
+                    )
+                except TelegramError:
+                    pass
+        # Unpin previous bot-managed tournament posts in this group; keep them in history.
+        previous_posts = await db.tournaments.find(
+            {
+                "group_id": chat_id,
+                "_id": {"$ne": tournament_id},
+                "tournament_message_id": {"$ne": None},
+                "tournament_message_pinned": True,
+            }
+        ).to_list(length=100)
+        for previous in previous_posts:
+            try:
+                await context.bot.unpin_chat_message(
+                    chat_id=chat_id,
+                    message_id=int(previous["tournament_message_id"]),
+                )
+            except TelegramError as exc:
+                logger.info("Could not unpin previous tournament post %s: %s", previous.get("_id"), exc)
+            await db.tournaments.update_one(
+                {"_id": previous["_id"]},
+                {"$set": {"tournament_message_pinned": False}},
+            )
+
+        try:
+            sent = await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=markup,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+        except TelegramError:
+            logger.exception("Could not send tournament announcement %s", tournament_id)
+            return False
+        message_id = sent.message_id
+        await db.tournaments.update_one(
+            {"_id": tournament_id},
+            {"$set": {
+                "tournament_message_id": int(message_id),
+                "tournament_message_chat_id": chat_id,
+                "tournament_message_pinned": False,
+            }},
+        )
+
+    # Re-pin on every refresh: an organiser may have manually unpinned the post
+    # since the previous edit. Telegram accepts pinning an already-pinned post.
+    try:
+        await context.bot.pin_chat_message(
+            chat_id=chat_id,
+            message_id=int(message_id),
+            disable_notification=True,
+        )
+        await db.tournaments.update_one(
+            {"_id": tournament_id},
+            {"$set": {"tournament_message_pinned": True}},
+        )
+    except TelegramError as exc:
+        logger.warning("Tournament post %s was sent/updated but could not be pinned: %s", tournament_id, exc)
+        await db.tournaments.update_one(
+            {"_id": tournament_id},
+            {"$set": {"tournament_message_pinned": False}},
+        )
+        return False
+    return True
 
 
 async def reply_html_chunks(message: Any, lines: list[str], limit: int = 3800) -> None:

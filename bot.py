@@ -414,7 +414,9 @@ def build_application(settings: Settings, db: Database) -> Application:
     application.add_handler(
         CommandHandler("adminparticipants", admin.admin_participants)
     )
-
+    application.add_handler(
+        CallbackQueryHandler(admin.tournament_callback, pattern=r"^tour:")
+    )
     application.add_handler(
         CallbackQueryHandler(user.help_callback, pattern=r"^help:")
     )

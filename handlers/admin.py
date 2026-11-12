@@ -5,12 +5,15 @@ import html
 import logging
 from datetime import datetime, timedelta, timezone
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatMemberStatus, ParseMode
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
-from utils import is_admin, is_group_chat, match_line, reply_html_chunks, tournament_summary, user_link
+from utils import (
+    is_admin, is_group_chat, match_line, refresh_tournament_announcement,
+    reply_html_chunks, tournament_summary, user_link,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,11 +103,11 @@ async def new_tournament(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     try:
-        # Handle capacity: default to 0 (unlimited) if left blank, '0', 'none', or 'unlimited'
+        # Capacity 0 is the database representation of unlimited registrations.
         capacity = 0
         if len(fields) >= 3:
-            cap_str = fields[2].lower()
-            if cap_str not in ("", "0", "none", "unlimited"):
+            cap_str = fields[2].strip().casefold()
+            if cap_str not in ("", "0", "none", "unlimited", "no limit", "infinite"):
                 capacity = int(cap_str)
 
         chat = update.effective_chat
@@ -112,7 +115,7 @@ async def new_tournament(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         tournament = await service.create_tournament(
             name=fields[0],
             tournament_format=fields[1],
-            capacity=capacity,  # 0 indicates no limit
+            capacity=capacity,
             manager_id=update.effective_user.id,
             manager_name=update.effective_user.first_name,
             group_id=chat.id,
@@ -127,15 +130,28 @@ async def new_tournament(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.effective_message.reply_text("Something went wrong while creating the tournament.")
         return
 
-    manager = user_link(update.effective_user.id, update.effective_user.first_name)
-    await update.effective_message.reply_text(
-        "✅ <b>TOURNAMENT CREATED</b>\n\n"
-        f"{tournament_summary(tournament)}\n\n"
-        f"Tournament Manager: {manager}\n\n"
-        "Participants can now use <code>/register</code> in this group.\n"
-        "The creator can appoint tournament admins by replying to a member's message with <code>/addtouradmin</code>.",
-        parse_mode=ParseMode.HTML,
-    )
+    # Create and pin the single public tournament card, then remove the command
+    # so the group is left with the polished interactive announcement.
+    try:
+        posted = await refresh_tournament_announcement(
+            context, tournament["_id"], create_if_missing=True
+        )
+    except TelegramError:
+        logger.exception("Could not send or pin the tournament announcement")
+        posted = False
+    try:
+        await update.effective_message.delete()
+    except TelegramError as exc:
+        logger.info("Could not delete /newtournament command message: %s", exc)
+
+    if not posted:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=(
+                "Tournament created, but I could not publish its interactive pinned post. "
+                "Please check that I can send and pin messages in this group."
+            ),
+        )
 
 async def add_tournament_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tournament = await _require_tournament_access(update, context)
@@ -212,7 +228,8 @@ async def set_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text("Rules are too long. Keep them under 3,500 characters.")
         return
     await context.application.bot_data["tournament_service"].set_rules(tournament["_id"], parts[1])
-    await update.effective_message.reply_text("✅ Tournament rules updated.")
+    await refresh_tournament_announcement(context, tournament["_id"])
+    await update.effective_message.reply_text("✅ Tournament rules updated. The pinned tournament post has been refreshed.")
 
 
 async def set_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -228,7 +245,8 @@ async def set_description(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except ValueError as exc:
         await update.effective_message.reply_text(str(exc))
         return
-    await update.effective_message.reply_text("✅ Tournament description updated.")
+    await refresh_tournament_announcement(context, tournament["_id"])
+    await update.effective_message.reply_text("✅ Tournament description updated. The pinned tournament post has been refreshed.")
 
 
 async def set_tournament_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -246,6 +264,7 @@ async def set_tournament_status(update: Update, context: ContextTypes.DEFAULT_TY
         await update.effective_message.reply_text(str(exc))
         return
     if found:
+        await refresh_tournament_announcement(context, tournament["_id"])
         suffix = " The group can now create its next tournament." if status == "completed" else ""
         await update.effective_message.reply_text(f"✅ Tournament status set to {status}.{suffix}")
     else:
@@ -266,6 +285,7 @@ async def generate_fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         logger.exception("Fixture generation failed")
         await update.effective_message.reply_text("Fixture generation failed. Check the server logs.")
         return
+    await refresh_tournament_announcement(context, tournament["_id"])
     preview = "\n".join(match_line(item) for item in matches[:12])
     suffix = f"\n…and {len(matches) - 12} more matches." if len(matches) > 12 else ""
     await update.effective_message.reply_text(
@@ -302,6 +322,7 @@ async def set_result(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     }
     await update.effective_message.reply_text(messages[result])
     if result == "result_saved":
+        await refresh_tournament_announcement(context, tournament["_id"])
         refreshed = await context.application.bot_data["tournament_service"].get_tournament(tournament["_id"])
         if refreshed and refreshed.get("status") == "completed":
             await update.effective_message.reply_text(
@@ -371,6 +392,7 @@ async def eliminate_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await update.effective_message.reply_text(rr_messages.get(result, "Could not disqualify that player."))
             return
         cancelled = details["cancelled_matches"]
+        await refresh_tournament_announcement(context, tournament["_id"])
         await update.effective_message.reply_text(
             "🚫 <b>PLAYER DISQUALIFIED</b>\n\n"
             f"Player: {user_link(details['user_id'], details['name'])}\n"
@@ -411,6 +433,7 @@ async def eliminate_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         parse_mode=ParseMode.HTML,
     )
 
+    await refresh_tournament_announcement(context, tournament["_id"])
     refreshed = await service.get_tournament(tournament["_id"])
     if refreshed and refreshed.get("status") == "completed":
         await update.effective_message.reply_text(
@@ -555,3 +578,140 @@ async def admin_participants(update: Update, context: ContextTypes.DEFAULT_TYPE)
     for number, participant in enumerate(participants, start=1):
         lines.append(f"{number}. {user_link(participant['user_id'], participant['name'])} — <code>{participant['user_id']}</code>")
     await reply_html_chunks(update.effective_message, lines)
+
+
+async def tournament_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    parts = query.data.split(":")
+    if len(parts) != 3 or parts[0] != "tour":
+        await query.answer("Invalid tournament action.", show_alert=True)
+        return
+
+    action, tournament_id = parts[1], parts[2].strip().upper()
+    service = context.application.bot_data["tournament_service"]
+    tournament = await service.get_tournament(tournament_id)
+    if not tournament:
+        await query.answer("This tournament could not be found.", show_alert=True)
+        return
+
+    message = query.message
+    if (
+        not message
+        or int(message.chat.id) != int(tournament.get("group_id", 0))
+        or int(message.message_id) != int(tournament.get("tournament_message_id", -1))
+    ):
+        await query.answer("This is not the current tournament control message.", show_alert=True)
+        return
+
+    if action == "status":
+        registered = int(tournament.get("registered_count", 0) or 0)
+        capacity = int(tournament.get("capacity", 0) or 0)
+        if capacity > 0 and registered >= capacity:
+            await query.answer("Registration is full. Contact the tournament manager if a place opens.", show_alert=True)
+        else:
+            await query.answer("Registration is currently closed.", show_alert=True)
+        return
+
+    # --- NEW BLOCK: INSTANT REGISTRATION ---
+    if action == "register":
+        # 1. Check if registration is open
+        if str(tournament.get("status", "")).lower() != "open":
+            await query.answer("Registration is currently closed.", show_alert=True)
+            return
+
+        # 2. Check if user already exists in the bot's database (has started the bot)
+        db = context.application.bot_data["db"]
+        user_doc = await db.users.find_one({"_id": query.from_user.id})
+        
+        if not user_doc:
+            # User hasn't started the bot in DM yet. Seamlessly redirect them to DM.
+            bot_username = context.bot.username
+            deep_link = f"https://t.me/{bot_username}?start=treg_{message.chat.id}_{tournament_id}"
+            await query.answer("Please start the bot in DM first!", url=deep_link)
+            return
+
+        result = await service.register(
+            tournament_id, message.chat.id, query.from_user.id, 
+            query.from_user.first_name, query.from_user.username
+        )
+        
+        messages = {
+            "registered": "✅ You have been registered successfully!",
+            "already_registered": "You are already registered for this tournament.",
+            "closed": "Registration is closed.",
+            "full": "The tournament is full."
+        }
+        
+        # Show instant popup message (toast) in the group
+        await query.answer(messages.get(result, "Registration processed."), show_alert=True)
+        
+        # Update the pinned message so the player count increments immediately
+        if result == "registered":
+            await refresh_tournament_announcement(context, tournament_id)
+            
+        return
+    
+    if not await _has_tournament_access(update, context, tournament):
+        await query.answer(
+            "⛔ Only the tournament manager or appointed tournament admins can use this control.",
+            show_alert=True,
+        )
+        return
+
+    if not tournament.get("is_active", False):
+        await query.answer("This tournament is no longer active.", show_alert=True)
+        return
+
+    if action == "toggle":
+        if tournament.get("fixtures_generated") or tournament.get("status") not in {"open", "closed"}:
+            await query.answer("Registration cannot be toggled after fixtures are generated.", show_alert=True)
+            return
+        new_status = "closed" if tournament.get("status") == "open" else "open"
+        try:
+            changed = await service.set_status(tournament_id, new_status)
+        except ValueError as exc:
+            await query.answer(str(exc), show_alert=True)
+            return
+        if not changed:
+            await query.answer("Tournament not found.", show_alert=True)
+            return
+        await refresh_tournament_announcement(context, tournament_id)
+        await query.answer(f"Registration turned {'OFF' if new_status == 'closed' else 'ON'}.")
+        return
+
+    if action == "cancel":
+        confirm_markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Confirm Cancel", callback_data=f"tour:cancelconfirm:{tournament_id}"),
+                InlineKeyboardButton("↩️ Keep Tournament", callback_data=f"tour:cancelabort:{tournament_id}"),
+            ]
+        ])
+        try:
+            await query.edit_message_reply_markup(reply_markup=confirm_markup)
+        except TelegramError as exc:
+            logger.warning("Could not show tournament cancellation confirmation: %s", exc)
+        await query.answer("Confirm cancellation using the button shown below.", show_alert=True)
+        return
+
+    if action == "cancelconfirm":
+        try:
+            changed = await service.set_status(tournament_id, "cancelled")
+        except ValueError as exc:
+            await query.answer(str(exc), show_alert=True)
+            return
+        if not changed:
+            await query.answer("Tournament not found.", show_alert=True)
+            return
+        await refresh_tournament_announcement(context, tournament_id)
+        await query.answer("Tournament cancelled.", show_alert=True)
+        return
+
+    if action == "cancelabort":
+        await refresh_tournament_announcement(context, tournament_id)
+        await query.answer("Cancellation dismissed.")
+        return
+
+    await query.answer("Unknown tournament action.", show_alert=True)
