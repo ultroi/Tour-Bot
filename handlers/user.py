@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import time
+from pymongo import message
 from telegram.error import BadRequest
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -341,18 +342,44 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if not await ensure_group(update, context):
         return
+
     if len((update.effective_message.text or "").strip().split(maxsplit=1)) > 1:
         await update.effective_message.reply_text("Just send /register. Your Telegram first name is used automatically.")
         return
+
+    # 1. Pehle tournament fetch karo (taaki hume tournament_id mil sake)
     service = context.application.bot_data["tournament_service"]
     tournament = await service.get_active_tournament(update.effective_chat.id)
     if not tournament:
         await update.effective_message.reply_text("There is no active tournament open for registration in this group.")
         return
+
+    # 2. Database se check karo ki player ne DM me bot start kiya hai ya nahi
+    db = context.application.bot_data["db"]
     user = update.effective_user
+    user_doc = await db.users.find_one({"_id": user.id})
+    
+    if not user_doc:
+        # Agar start nahi kiya hai, toh link banao aur button me bhej do
+        bot_username = context.bot.username
+        tournament_id = tournament["_id"]
+        chat_id = update.effective_chat.id
+        deep_link = f"https://t.me/{bot_username}?start=treg_{chat_id}_{tournament_id}"
+        
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🚀 Start Bot", url=deep_link)]
+        ])
+        await update.effective_message.reply_text(
+            "⚠️ Please start the bot in DM first to complete your registration!", 
+            reply_markup=keyboard
+        )
+        return
+
+    # 3. Agar pehle se start kiya hua hai, toh seedha register kar do
     result = await service.register(
         tournament["_id"], update.effective_chat.id, user.id, user.first_name, user.username
     )
+    
     name_link = user_link(user.id, user.first_name)
     messages = {
         "registered": f"✅ {name_link}, you are registered for <b>{html.escape(tournament['name'])}</b>.",
@@ -362,6 +389,10 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "full": "Sorry, this tournament has reached its participant limit.",
     }
     await update.effective_message.reply_text(messages[result], parse_mode=ParseMode.HTML)
+    
+    # Registration ke baad Pinned Announcement ko update karna mat bhoolna
+    if result == "registered":
+        await refresh_tournament_announcement(context, tournament["_id"])
 
 
 async def unregister(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
