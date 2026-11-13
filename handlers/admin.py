@@ -350,7 +350,7 @@ async def eliminate_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     match_id: str | None = None
     loser_id: int | None = None
     if len(parts) == 1 and replied_user:
-        # Reply to the losing player's message with /eleminate.
+        # Reply to the losing player's message with /eliminate.
         loser_id = replied_user.id
     elif len(parts) == 2 and replied_user:
         # Optional explicit match ID while still replying to the loser.
@@ -365,9 +365,9 @@ async def eliminate_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     else:
         await update.effective_message.reply_text(
             "Usage:\n"
-            "• Reply to the losing player's message with /eleminate\n"
-            "• /eleminate MATCH_ID LOSER_USER_ID\n"
-            "• /eleminate LOSER_USER_ID\n\n"
+            "• Reply to the losing player's message with /eliminate\n"
+            "• /eliminate MATCH_ID LOSER_USER_ID\n"
+            "• /eliminate LOSER_USER_ID\n\n"
             "Knockout: specify MATCH_ID when needed. Round robin: this disqualifies the player and cancels their pending fixtures.\n"
             "Use /adminparticipants to see player IDs."
         )
@@ -377,7 +377,7 @@ async def eliminate_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if tournament.get("format") == "round_robin":
         if match_id:
             await update.effective_message.reply_text(
-                "For round-robin disqualification, use /eleminate USER_ID or reply to the player's message with /eleminate."
+                "For round-robin disqualification, use /eliminate USER_ID or reply to the player's message with /eliminate."
             )
             return
         result, details = await service.disqualify_round_robin(
@@ -414,9 +414,9 @@ async def eliminate_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
     messages = {
         "tournament_not_found": "Tournament not found.",
-        "not_knockout": "/eleminate is available only for knockout tournaments.",
+        "not_knockout": "/eliminate is available only for knockout tournaments.",
         "match_not_found": "No scheduled match was found for that player. Check the match ID or player ID.",
-        "multiple_matches": "This player appears in more than one scheduled match. Use /eleminate MATCH_ID LOSER_USER_ID.",
+        "multiple_matches": "This player appears in more than one scheduled match. Use /eliminate MATCH_ID LOSER_USER_ID.",
         "match_not_ready": "This match is not scheduled or has already been completed.",
         "loser_not_in_match": "The specified losing player is not part of that match.",
         "participant_not_found": "That player is not in this tournament's participant list.",
