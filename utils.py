@@ -172,7 +172,7 @@ def tournament_announcement_text(tournament: dict[str, Any]) -> str:
     elif status == "open" and is_full:
         lines.extend(["", "Registration is full. No additional entries can be accepted unless the manager reopens places."])
     elif status == "open":
-        lines.extend(["", "Tap <b>Register in DM</b>, then press <b>Start</b> in the bot chat. Your registration will be completed automatically."])
+        lines.extend(["", "Use /register to join this tournament while registration is open."])
     elif status == "closed":
         lines.extend(["", "Registration is currently paused by the tournament team."])
     elif status == "cancelled":
@@ -180,7 +180,7 @@ def tournament_announcement_text(tournament: dict[str, Any]) -> str:
     elif status == "completed":
         lines.extend(["", "This tournament has been completed. Thank you to everyone who participated!"])
 
-    lines.extend(["", "━━━━━━━━━━━━━━━━━━", "<i>This message updates automatically when tournament details change.</i>"])
+    lines.extend(["", "━━━━━━━━━━━━━━━━━━"])
     return "\n".join(lines)
 
 
