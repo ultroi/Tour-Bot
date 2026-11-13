@@ -83,8 +83,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📚 View Tournaments", callback_data="help:home"),
-            InlineKeyboardButton("🧾 My Registrations", callback_data="help:personal")
+            InlineKeyboardButton("📚 View Tournaments", callback_data="start:tournaments"),
+            InlineKeyboardButton("🧾 My Registrations", callback_data="start:registrations")
         ],
         [
             InlineKeyboardButton("❓ Help & Commands", callback_data="help:home")
@@ -266,6 +266,23 @@ async def help_callback(
     except BadRequest as exc:
         if "Message is not modified" not in str(exc):
             raise exc
+
+
+async def start_menu_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Route actions from the private /start menu."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    action = query.data.split(":", 1)[1]
+    if action == "tournaments":
+        await list_tournaments(update, context)
+    elif action == "registrations":
+        await my_registrations(update, context)
 
 
 async def _resolve_tournament(update: Update, context: ContextTypes.DEFAULT_TYPE, allow_completed: bool = True) -> dict | None:

@@ -438,6 +438,9 @@ def build_application(settings: Settings, db: Database) -> Application:
     application.add_handler(
         CallbackQueryHandler(user.help_callback, pattern=r"^help:")
     )
+    application.add_handler(
+        CallbackQueryHandler(user.start_menu_callback, pattern=r"^start:")
+    )
 
     application.add_error_handler(error_handler)
     return application
