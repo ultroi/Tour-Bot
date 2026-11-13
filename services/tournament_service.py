@@ -237,6 +237,46 @@ class TournamentService:
             return "unregistered"
         return "not_registered"
 
+    async def remove_player(self, tournament_id: str, group_id: int, user_id: int) -> tuple[str, dict[str, Any] | None]:
+        """Remove a participant and rebuild an unplayed schedule if one exists."""
+        tid = tournament_id.upper()
+        tournament = await self.db.tournaments.find_one({"_id": tid, "group_id": int(group_id)})
+        if not tournament:
+            return "not_found", None
+        registration = await self.db.registrations.find_one(
+            {"tournament_id": tid, "group_id": int(group_id), "user_id": int(user_id)}
+        )
+        if not registration:
+            return "not_registered", None
+        if tournament.get("fixtures_generated"):
+            completed = await self.db.matches.count_documents({"tournament_id": tid, "status": "completed"})
+            if completed:
+                return "results_exist", None
+
+        await self.db.registrations.delete_one({"_id": registration["_id"]})
+        await self.db.tournaments.update_one(
+            {"_id": tid, "group_id": int(group_id), "registered_count": {"$gt": 0}},
+            {"$inc": {"registered_count": -1}},
+        )
+        rebuilt = 0
+        if tournament.get("fixtures_generated"):
+            participants = await self.get_participants(tid)
+            matches = generate_fixtures(participants, tid, tournament["format"])
+            previous = await self.get_matches(tid)
+            await self.db.matches.delete_many({"tournament_id": tid})
+            try:
+                if matches:
+                    await self.db.matches.insert_many(matches)
+                rebuilt = len(matches)
+            except Exception:
+                if previous:
+                    await self.db.matches.insert_many(previous)
+                # Restore the removed participant and counter if schedule replacement failed.
+                await self.db.registrations.insert_one(registration)
+                await self.db.tournaments.update_one({"_id": tid}, {"$inc": {"registered_count": 1}})
+                raise
+        return "removed", {"user_id": int(user_id), "name": registration.get("name") or "Player", "fixtures_rebuilt": rebuilt}
+
     async def get_participants(self, tournament_id: str) -> list[dict[str, Any]]:
         cursor = self.db.registrations.find({
             "tournament_id": tournament_id.upper(),
@@ -402,13 +442,25 @@ class TournamentService:
                 )
         return "result_saved"
 
-    async def set_result(self, tournament_id: str, match_id: str, winner_id: int) -> str:
+    async def set_result(self, tournament_id: str, match_id: str, winner_id: int | str) -> str:
         tid = tournament_id.upper()
         match = await self.db.matches.find_one({"tournament_id": tid, "match_id": match_id.upper()})
         if not match:
             return "match_not_found"
         if match.get("status") != "scheduled":
             return "match_not_ready"
+        if isinstance(winner_id, str) and winner_id.strip().lower() in {"draw", "tie"}:
+            tournament = await self.db.tournaments.find_one({"_id": tid}, {"format": 1})
+            if not tournament or tournament.get("format") != "round_robin":
+                return "draw_not_allowed"
+            if not match.get("player1_id") or not match.get("player2_id"):
+                return "match_not_ready"
+            updated = await self.db.matches.update_one(
+                {"_id": match["_id"], "status": "scheduled"},
+                {"$set": {"status": "completed", "is_draw": True, "winner_id": None,
+                          "winner_name": None, "completed_at": utc_now()}},
+            )
+            return "draw_saved" if updated.modified_count else "match_not_ready"
         return await self._save_match_winner(tid, match, winner_id)
 
     async def eliminate(

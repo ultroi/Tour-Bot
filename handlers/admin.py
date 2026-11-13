@@ -131,6 +131,15 @@ async def new_tournament(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.effective_message.reply_text("Something went wrong while creating the tournament.")
         return
 
+    # New tournaments always start with registration CLOSED.
+    # Keep the registration method at AUTO unless the manager changes it later.
+    await context.application.bot_data["db"].tournaments.update_one(
+        {"_id": tournament["_id"]},
+        {"$set": {"status": "closed", "registration_mode": "auto"}},
+    )
+    tournament["status"] = "closed"
+    tournament["registration_mode"] = "auto"
+
     # Create and pin the single public tournament card, then remove the command
     # so the group is left with the polished interactive announcement.
     try:
@@ -300,30 +309,37 @@ async def set_result(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     parts = (update.effective_message.text or "").split()
     if len(parts) != 3:
         await update.effective_message.reply_text(
-            "Usage: /setresult MATCH_ID WINNER_USER_ID\nExample: /setresult R1-M1 123456789\n"
+            "Usage: /setresult MATCH_ID WINNER_USER_ID (or DRAW for round-robin)\nExample: /setresult R1-M1 123456789\n"
             "Use /adminparticipants to see player IDs."
         )
         return
-    try:
-        winner_id = int(parts[2])
-    except ValueError:
-        await update.effective_message.reply_text("WINNER_USER_ID must be a numeric Telegram user ID.")
-        return
+    if parts[2].strip().lower() in {"draw", "tie"}:
+        outcome: int | str = "draw"
+        winner_id = None
+    else:
+        try:
+            winner_id = int(parts[2])
+            outcome = winner_id
+        except ValueError:
+            await update.effective_message.reply_text("Use a numeric winner ID, or DRAW for a round-robin tie.")
+            return
     result = await context.application.bot_data["tournament_service"].set_result(
-        tournament["_id"], parts[1], winner_id
+        tournament["_id"], parts[1], outcome
     )
     messages = {
+        "draw_saved": "Draw saved. Both players receive 1 point.",
+        "draw_not_allowed": "Draws are only supported in round-robin tournaments. A knockout match needs a winner to advance.",
         "result_saved": "✅ Result saved. The winner has been advanced where applicable.",
         "match_not_found": "Match not found. Check the match ID, for example R1-M1.",
         "match_not_ready": "This match is not ready for a result, or it has already been completed.",
         "winner_not_in_match": "That user ID is not one of the two players in this match.",
     }
     await update.effective_message.reply_text(messages[result])
-    if result == "result_saved":
+    if result in {"result_saved", "draw_saved"}:
         await refresh_tournament_announcement(context, tournament["_id"])
         await refresh_published_fixture_messages(context, tournament["_id"])
         refreshed = await context.application.bot_data["tournament_service"].get_tournament(tournament["_id"])
-        if refreshed and refreshed.get("status") == "completed":
+        if result == "result_saved" and refreshed and refreshed.get("status") == "completed":
             await update.effective_message.reply_text(
                 f"🏆 Tournament complete! Winner: {user_link(winner_id, refreshed.get('winner_name', 'Champion'))}",
                 parse_mode=ParseMode.HTML,
@@ -621,12 +637,17 @@ async def tournament_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # --- NEW BLOCK: INSTANT REGISTRATION ---
     if action == "register":
-        # 1. Check if registration is open
-        if str(tournament.get("status", "")).lower() != "open":
-            await query.answer("Registration is currently closed.", show_alert=True)
+        # Enforce registration state and method on the server, not just in the UI.
+        if str(tournament.get("status", "closed")).lower() != "open":
+            await query.answer("Registration is currently OFF. Ask the manager to open it.", show_alert=True)
             return
 
-        # 2. Check if user already exists in the bot's database (has started the bot)
+        registration_mode = str(tournament.get("registration_mode", "auto")).lower()
+        if registration_mode == "manual":
+            await query.answer("This tournament uses MANUAL registration. Contact the tournament admin.", show_alert=True)
+            return
+
+        # Check if user already exists in the bot's database (has started the bot)
         db = context.application.bot_data["db"]
         user_doc = await db.users.find_one({"_id": query.from_user.id})
         
@@ -667,6 +688,67 @@ async def tournament_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if not tournament.get("is_active", False):
         await query.answer("This tournament is no longer active.", show_alert=True)
+        return
+
+    if action == "manage":
+        # Check permissions before expanding
+        if not await _has_tournament_access(update, context, tournament):
+            await query.answer("⛔ Only the tournament manager or admins can manage this.", show_alert=True)
+            return
+        # Refresh message, telling utils to show the manage menu
+        # You will need to import bot_username resolution logic here or fetch it.
+        bot_username = context.bot.username
+        markup = tournament_announcement_keyboard(tournament, bot_username, show_manage_menu=True)
+        try:
+             await query.edit_message_reply_markup(reply_markup=markup)
+             await query.answer()
+        except BadRequest:
+             await query.answer("Menu already open.")
+        return
+
+    if action == "hidemanage":
+        if not await _has_tournament_access(update, context, tournament):
+            await query.answer("⛔ Only the tournament manager or admins can manage this.", show_alert=True)
+            return
+        bot_username = context.bot.username
+        markup = tournament_announcement_keyboard(tournament, bot_username, show_manage_menu=False)
+        try:
+             await query.edit_message_reply_markup(reply_markup=markup)
+             await query.answer()
+        except BadRequest:
+             await query.answer("Menu already hidden.")
+        return
+
+    if action == "mode":
+        if not await _has_tournament_access(update, context, tournament):
+            await query.answer("⛔ Only the tournament manager or admins can change modes.", show_alert=True)
+            return
+            
+        current_mode = tournament.get("registration_mode", "auto")
+        # Cycle through modes: auto -> manual -> both -> auto
+        if current_mode == "auto":
+             new_mode = "manual"
+        elif current_mode == "manual":
+             new_mode = "both"
+        else:
+             new_mode = "auto"
+             
+        # Update Database
+        await context.application.bot_data["db"].tournaments.update_one(
+             {"_id": tournament_id}, 
+             {"$set": {"registration_mode": new_mode}}
+        )
+        
+        # Fetch updated tournament doc
+        tournament = await service.get_tournament(tournament_id)
+        bot_username = context.bot.username
+        markup = tournament_announcement_keyboard(tournament, bot_username, show_manage_menu=True)
+        
+        try:
+             await query.edit_message_reply_markup(reply_markup=markup)
+             await query.answer(f"Registration mode changed to: {new_mode.upper()}")
+        except BadRequest:
+             pass
         return
 
     if action == "toggle":
@@ -719,6 +801,151 @@ async def tournament_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     await query.answer("Unknown tournament action.", show_alert=True)
+
+
+
+async def remove_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Completely remove a registered player from the active tournament."""
+    tournament = await _require_tournament_access(update, context)
+    if not tournament:
+        return
+    message = update.effective_message
+    parts = (message.text or "").split()
+    reply = message.reply_to_message
+    target = reply.from_user if reply and reply.from_user and not reply.from_user.is_bot else None
+    if target:
+        user_id = int(target.id)
+    elif len(parts) == 2:
+        try:
+            user_id = int(parts[1])
+        except ValueError:
+            user_id = 0
+    else:
+        user_id = 0
+    if user_id <= 0:
+        await message.reply_text(
+            "Usage: reply to a player's message with /rmplayer, or use /rmplayer USER_ID."
+        )
+        return
+
+    service = context.application.bot_data["tournament_service"]
+    result, details = await service.remove_player(tournament["_id"], update.effective_chat.id, user_id)
+    messages = {
+        "not_found": "No tournament was found.",
+        "not_registered": "That player is not registered in this tournament.",
+        "results_exist": "A match result has already been recorded. Use /eliminate for knockout tournaments or the round-robin disqualification flow to preserve standings history.",
+    }
+    if result != "removed" or not details:
+        await message.reply_text(messages.get(result, "Could not remove that player."))
+        return
+    await refresh_tournament_announcement(context, tournament["_id"])
+    if tournament.get("fixtures_generated"):
+        await refresh_published_fixture_messages(context, tournament["_id"])
+    await message.reply_text(
+        f"✅ Removed {user_link(details['user_id'], details['name'])} from the tournament completely."
+        + (f" Rebuilt {details['fixtures_rebuilt']} fixtures." if tournament.get("fixtures_generated") else ""),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def manual_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin command to manually register a player by Telegram ID or reply."""
+
+    tournament = await _require_tournament_access(update, context)
+    if not tournament:
+        return
+
+    message = update.effective_message
+    parts = (message.text or "").split(maxsplit=1)
+
+    target_user = None
+    target_id = None
+    target_name = None
+    target_username = None
+
+    # Method 1: Register by replying to a user's message
+    if message.reply_to_message:
+        target_user = message.reply_to_message.from_user
+
+        if not target_user:
+            await message.reply_text(
+                "⛔ Cannot identify this user. Please reply to a normal user's message."
+            )
+            return
+
+        if target_user.is_bot:
+            await message.reply_text("⛔ Bots cannot be registered as players.")
+            return
+
+        target_id = target_user.id
+        target_name = target_user.first_name or f"Player {target_id}"
+        target_username = target_user.username
+
+    # Method 2: Register using Telegram User ID
+    elif len(parts) >= 2:
+        try:
+            target_id = int(parts[1].strip())
+        except ValueError:
+            await message.reply_text(
+                "⛔ Invalid Telegram User ID. Please enter a numeric ID."
+            )
+            return
+
+        if target_id <= 0:
+            await message.reply_text("⛔ Invalid Telegram User ID.")
+            return
+
+        # Telegram does not reveal a user's name from their ID alone.
+        target_name = f"Player {target_id}"
+        target_username = None
+
+    else:
+        await message.reply_text(
+            "⚠️ <b>Usage:</b>\n\n"
+            "1. By User ID:\n"
+            "<code>/addplayer 123456789</code>\n\n"
+            "2. By Reply:\n"
+            "Reply to the player's message with:\n"
+            "<code>/addplayer</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    service = context.application.bot_data["tournament_service"]
+
+    result = await service.register(
+        tournament_id=tournament["_id"],
+        group_id=update.effective_chat.id,
+        user_id=target_id,
+        first_name=target_name,
+        username=target_username
+    )
+
+    safe_name = html.escape(target_name)
+
+    messages = {
+        "registered": (
+            f"✅ <b>Success!</b>\n"
+            f"{safe_name} has been manually added to the tournament.\n"
+            f"<b>User ID:</b> <code>{target_id}</code>"
+        ),
+        "already_registered": (
+            f"⚠️ <b>{safe_name}</b> is already registered."
+        ),
+        "closed": "⛔ Cannot add player: Registration is currently closed.",
+        "full": "⛔ Cannot add player: The tournament is already full.",
+        "not_found": "⛔ Active tournament not found."
+    }
+
+    await message.reply_text(
+        messages.get(result, str(result)),
+        parse_mode=ParseMode.HTML
+    )
+
+    if result == "registered":
+        await refresh_tournament_announcement(
+            context, tournament["_id"]
+        )
 
 
 # ---------------------------------------------------------------------------

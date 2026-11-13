@@ -402,6 +402,8 @@ def build_application(settings: Settings, db: Database) -> Application:
     application.add_handler(CommandHandler("mystatus", user.my_status))
     application.add_handler(CommandHandler("standings", user.standings))
     application.add_handler(CommandHandler("myid", user.my_id))
+    application.add_handler(CommandHandler("addplayer", admin.manual_register))
+    application.add_handler(CommandHandler("rmplayer", admin.remove_player))
 
     # Admin/manager commands; role checks remain inside their handlers.
     application.add_handler(CommandHandler("newtournament", admin.new_tournament))

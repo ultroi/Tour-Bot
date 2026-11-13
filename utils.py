@@ -131,7 +131,7 @@ def tournament_announcement_text(tournament: dict[str, Any]) -> str:
     name = html.escape(str(tournament.get("name", "Tournament")))
     tournament_id = html.escape(str(tournament.get("_id", "")))
     fmt = html.escape(str(tournament.get("format", "knockout")).replace("_", " ").title())
-    status = str(tournament.get("status", "open")).lower()
+    status = str(tournament.get("status", "closed")).lower()
     status_labels = {
         "open": "🟢 OPEN",
         "closed": "🔴 CLOSED",
@@ -184,12 +184,18 @@ def tournament_announcement_text(tournament: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def tournament_announcement_keyboard(tournament: dict[str, Any], bot_username: str) -> InlineKeyboardMarkup | None:
+def tournament_announcement_keyboard(
+    tournament: dict[str, Any], 
+    bot_username: str, 
+    show_manage_menu: bool = False
+) -> InlineKeyboardMarkup | None:
     """Build the public controls. Admin actions are authorized again on callback."""
     tournament_id = str(tournament["_id"])
     group_id = int(tournament["group_id"])
-    status = str(tournament.get("status", "open")).lower()
+    status = str(tournament.get("status", "closed")).lower()
     is_active = bool(tournament.get("is_active", False))
+    registration_mode = str(tournament.get("registration_mode", "auto")).lower()
+    
     rows: list[list[InlineKeyboardButton]] = []
 
     registered = int(tournament.get("registered_count", 0) or 0)
@@ -200,9 +206,14 @@ def tournament_announcement_keyboard(tournament: dict[str, Any], bot_username: s
         capacity = 0
     is_full = capacity > 0 and registered >= capacity
 
+    # --- PLAYER VIEW ---
+    # Only show "Register Now" if the mode is "auto" (or "both")
     if status == "open" and is_active and not is_full:
-        register_url = tournament_deep_link(bot_username, f"treg_{group_id}_{tournament_id}")
-        rows.append([InlineKeyboardButton("✅ Register Now", callback_data=f"tour:register:{tournament_id}")])
+        if registration_mode in ["auto", "both"]:
+            register_url = tournament_deep_link(bot_username, f"treg_{group_id}_{tournament_id}")
+            rows.append([InlineKeyboardButton("✅ Register Now", callback_data=f"tour:register:{tournament_id}")])
+        else:
+             rows.append([InlineKeyboardButton("📝 Manual Registration Only", callback_data=f"tour:status:{tournament_id}")])
     elif status == "open" and is_active and is_full:
         rows.append([InlineKeyboardButton("🔴 Registration Full", callback_data=f"tour:status:{tournament_id}")])
     elif status in {"closed", "generating", "ongoing"} and is_active:
@@ -212,12 +223,33 @@ def tournament_announcement_keyboard(tournament: dict[str, Any], bot_username: s
         rules_url = tournament_deep_link(bot_username, f"trules_{tournament_id}")
         rows.append([InlineKeyboardButton("📜 Tournament Rules", url=rules_url)])
 
-    if is_active and status in {"open", "closed"} and not tournament.get("fixtures_generated"):
-        toggle_label = "🔒 Turn Registration OFF" if status == "open" else "🟢 Turn Registration ON"
-        rows.append([InlineKeyboardButton(toggle_label, callback_data=f"tour:toggle:{tournament_id}")])
-
+    # --- ADMIN VIEW (MANAGE MENU) ---
     if is_active and status not in {"completed", "cancelled"}:
-        rows.append([InlineKeyboardButton("❌ Cancel Tournament", callback_data=f"tour:cancel:{tournament_id}")])
+        if not show_manage_menu:
+             # Default view: Just the "Manage" button
+             rows.append([InlineKeyboardButton("⚙️ Manage (Admins)", callback_data=f"tour:manage:{tournament_id}")])
+        else:
+             # Expanded view: Show the admin controls
+             
+             # 1. Toggle Open/Close
+             if not tournament.get("fixtures_generated"):
+                 toggle_label = "🔒 Turn Registration OFF" if status == "open" else "🟢 Turn Registration ON"
+                 rows.append([InlineKeyboardButton(toggle_label, callback_data=f"tour:toggle:{tournament_id}")])
+                 
+                 # 2. Toggle Mode (Auto / Manual / Both)
+                 mode_labels = {
+                     "auto": "⚙️ Mode: Auto (Button)",
+                     "manual": "⚙️ Mode: Manual (Admin only)",
+                     "both": "⚙️ Mode: Both"
+                 }
+                 current_mode_label = mode_labels.get(registration_mode, "⚙️ Mode: Auto")
+                 rows.append([InlineKeyboardButton(current_mode_label, callback_data=f"tour:mode:{tournament_id}")])
+
+             # 3. Cancel Tournament
+             rows.append([InlineKeyboardButton("❌ Cancel Tournament", callback_data=f"tour:cancel:{tournament_id}")])
+             
+             # 4. Hide Menu Button
+             rows.append([InlineKeyboardButton("⬆️ Hide Manage Menu", callback_data=f"tour:hidemanage:{tournament_id}")])
 
     return InlineKeyboardMarkup(rows) if rows else None
 
@@ -381,6 +413,8 @@ def match_line(match: dict[str, Any]) -> str:
     if status == "bye":
         return f"<code>{match_id}</code>: {first} — BYE (advances)"
     if status == "completed":
+        if match.get("is_draw"):
+            return f"<code>{match_id}</code>: {first} vs {second} — DRAW"
         winner = user_link(match.get("winner_id"), match.get("winner_name", "Unknown"))
         eliminated_id = match.get("eliminated_id")
         if eliminated_id is not None:
@@ -453,8 +487,11 @@ def fixture_round_text(
             else:
                 lines.append(f"   🔴 {html.escape(str(second_name))}")
         if status == "completed":
-            winner = user_link(match.get("winner_id"), match.get("winner_name", "Winner"))
-            lines.append(f"   ✅ <b>Completed</b> · Winner: {winner}")
+            if match.get("is_draw"):
+                lines.append("   🤝 <b>Completed · Draw</b>")
+            else:
+                winner = user_link(match.get("winner_id"), match.get("winner_name", "Winner"))
+                lines.append(f"   ✅ <b>Completed</b> · Winner: {winner}")
             if match.get("eliminated_id") is not None:
                 lines.append(
                     f"   ❌ Eliminated: {user_link(match.get('eliminated_id'), match.get('eliminated_name', 'Player'))}"
