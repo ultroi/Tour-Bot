@@ -129,16 +129,14 @@ HELP_TEXTS = {
     "player": (
         "🎮 <b>PLAYER COMMANDS</b>\n"
         "<i>Use these commands in the tournament group unless stated otherwise.</i>\n\n"
-        "🏆 <code>/tournament</code> — View active tournament details.\n\n"
-        "📝 <code>/register</code> — Register yourself for the active tournament. "
-        "Your Telegram first name is used automatically. Registration must be ON, "
-        "and your account must have started the bot in private chat.\n\n"
-        "❌ <code>/unregister</code> — Cancel your registration before fixtures are generated. "
+        "🏆 /tournament — View active tournament details.\n\n"
+        "📝 /register — Register yourself for the active tournament.\n\n"
+        "❌ /unregister — Cancel your registration before fixtures are generated. "
         "After fixture generation, contact the tournament team.\n\n"
-        "📜 <code>/rules</code> — Read the published tournament rules.\n\n"
-        "⚔️ <code>/fixtures</code> — View fixtures, rounds and match results.\n\n"
-        "📊 <code>/standings</code> — View standings for Round Robin tournaments.\n\n"
-        "📚 <code>/tournaments</code> — Browse the group's tournament history."
+        "📜 /rules — Read the published tournament rules.\n\n"
+        "⚔️ /fixtures — View fixtures, rounds and match results.\n\n"
+        "📊 /standings — View standings for Round Robin tournaments.\n\n"
+        "📚 /tournaments — Browse the group's tournament history."
     ),
 
     "personal": (
@@ -176,7 +174,7 @@ HELP_TEXTS = {
         "📊 <b>7. ADMIN OVERVIEW</b>\n"
         "/admintournaments< — View tournament administration and history."
         "/participants< — View the list of registered players and their status.\n"
-        "/addplayer USER_ID< — Manually register a player by their Telegram ID.\n"
+        "/addplayer USER_ID< — Manually register a player by their ID.\n"
         "/rmplayer USER_ID< — Remove a player from the tournament.\n"
         
     ),
