@@ -295,23 +295,6 @@ async def start_menu_callback(
         await my_status(update, context)
 
 
-async def start_menu_callback(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> None:
-    """Route actions from the private /start menu."""
-    query = update.callback_query
-    if not query:
-        return
-    await query.answer()
-
-    action = query.data.split(":", 1)[1]
-    if action == "tournaments":
-        await list_tournaments(update, context)
-    elif action == "registrations":
-        await my_registrations(update, context)
-
-
 async def _resolve_tournament(update: Update, context: ContextTypes.DEFAULT_TYPE, allow_completed: bool = True) -> dict | None:
     service = context.application.bot_data["tournament_service"]
     parts = (update.effective_message.text or "").split(maxsplit=1)
