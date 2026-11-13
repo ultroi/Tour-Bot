@@ -156,25 +156,29 @@ HELP_TEXTS = {
         "Use management commands in the tournament group.\n\n"
 
         "🏆 <b>1. CREATE A TOURNAMENT</b>\n"
-        "<code>/newtournament Name | Format | Capacity | Description</code>\n"
+        "/newtournament <code> Tour Name | Format {knockout/round_robin} | Capacity | Description</code>\n"
         "Only a Telegram group admin can create a tournament.\n"
-        "<code>/setrules Rules...</code> — Set or update the tournament rules.\n"
-        "<code>/complete</code> — Mark the tournament as completed.\n\n"
+        "/setrules Rules< — Set or update the tournament rules.\n"
+        "/complete< — Mark the tournament as completed.\n\n"
 
         "⚔️ <b>5. FIXTURES &amp; MATCH RESULTS</b>\n"
-        "<code>/generatefixtures</code> — Generate the schedule and open the private fixture editor. Press Done to publish it.\n"
-        "<code>/editfixtures</code> — Re-open the fixture editor before any match result is recorded.\n"
-        "<code>/setresult MATCH_ID WINNER_ID</code> — Record the winner of a match.\n"
-        "<code>/setresult MATCH_ID DRAW</code> — Record a draw in a Round Robin match.\n"
-        "<code>/eleminate LOSER_ID</code> — Eliminate a Knockout player and advance their opponent; in Round Robin, disqualify the player. "
+        "/generatefixtures< — Generate the schedule and open the private fixture editor. Press Done to publish it.\n"
+        "/editfixtures< — Re-open the fixture editor before any match result is recorded.\n"
+        "/setresult MATCH_ID WINNER_ID< — Record the winner of a match.\n"
+        "/setresult MATCH_ID DRAW< — Record a draw in a Round Robin match.\n"
+        "/eleminate LOSER_ID< — Eliminate a Knockout player and advance their opponent; in Round Robin, disqualify the player. "
         "Reply to the player's message with <code>/eleminate</code> also works.\n\n"
 
         "📢 <b>6. ANNOUNCEMENTS</b>\n"
-        "<code>/announce Your message</code> — Post an announcement in the group.\n"
-        "<code>/unpinannouncement</code> — Unpin the latest bot announcement.\n\n"
+        "/announce Your message< — Post an announcement in the group.\n"
+        "/unpinannouncement< — Unpin the latest bot announcement.\n\n"
 
         "📊 <b>7. ADMIN OVERVIEW</b>\n"
-        "<code>/admintournaments</code> — View tournament administration and history."
+        "/admintournaments< — View tournament administration and history."
+        "/participants< — View the list of registered players and their status.\n"
+        "/addplayer USER_ID< — Manually register a player by their Telegram ID.\n"
+        "/rmplayer USER_ID< — Remove a player from the tournament.\n"
+        
     ),
 
     "about": (
