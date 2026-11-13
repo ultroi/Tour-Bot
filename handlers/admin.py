@@ -1088,20 +1088,17 @@ async def fixture_editor_callback(update: Update, context: ContextTypes.DEFAULT_
         target_slot = int(parts[2])
         source_match = state["matches"][source_index]
         target_match = state["matches"][target_index]
+        
         left_id, left_name = source_match.get(f"player{source_slot}_id"), source_match.get(f"player{source_slot}_name")
         right_id, right_name = target_match.get(f"player{target_slot}_id"), target_match.get(f"player{target_slot}_name")
-        source_match[f"player{source_slot}_id"], source_match[f"player{source_slot}_name"] = right_id, right_name
-        target_match[f"player{target_slot}_id"], target_match[f"player{target_slot}_name"] = left_id, left_name
+        
+        # In do lines ko bhi simple assignment me kardo:
+        source_match[f"player{source_slot}_id"] = right_id
+        source_match[f"player{source_slot}_name"] = right_name
+        target_match[f"player{target_slot}_id"] = left_id
+        target_match[f"player{target_slot}_name"] = left_name
+        
         _recalculate_draft_match_status(source_match, tournament)
-        _recalculate_draft_match_status(target_match, tournament)
-        _rebuild_knockout_bye_slots(state["matches"], tournament)
-        state["selected_match"] = source_index
-        state.pop("cross_source", None)
-        state.pop("cross_source_slot", None)
-        state.pop("cross_target", None)
-        await query.answer("Players swapped between matches.")
-        await _render_fixture_match_menu(query, state)
-        return
     if action == "regen":
         try:
             participants = await service.get_participants(tournament["_id"])
