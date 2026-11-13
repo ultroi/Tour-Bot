@@ -113,103 +113,85 @@ def help_keyboard():
 
 def category_keyboard():
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🏠 Main Menu", callback_data="help:home"),
-        ]
+        [InlineKeyboardButton("🏠 Main Menu", callback_data="help:home")]
     ])
 
 
 HELP_TEXTS = {
     "home": (
-        "🏆 <b>TOURNAMENT MANAGER</b>\\n"
-        "<i>Your complete tournament hub</i>\\n\\n"
-        "Register for competitions, check fixtures and results, "
-        "read tournament rules, or manage your own tournaments.\\n\\n"
-        "Choose a section below to see the commands available to you."
+        "🏆 <b>TOURNAMENT MANAGER</b>\n"
+        "<i>Your complete tournament hub</i>\n\n"
+        "Register for competitions, check fixtures and results, read rules, "
+        "or manage tournaments.\n\n"
+        "Choose a section below to explore the available commands."
     ),
 
     "player": (
-        "🎮 <b>PLAYER COMMANDS</b>\\n"
-        "<i>Use these commands in the tournament group unless stated otherwise.</i>\\n\\n"
-        "🏆 <code>/tournament</code> — View the active tournament details.\\n\\n"
-        "📝 <code>/register</code> — Register for the active tournament using your Telegram first name. "
-        "Registration must be open.\\n\\n"
+        "🎮 <b>PLAYER COMMANDS</b>\n"
+        "<i>Use these commands in the tournament group unless stated otherwise.</i>\n\n"
+        "🏆 <code>/tournament</code> — View active tournament details.\n\n"
+        "📝 <code>/register</code> — Register yourself for the active tournament. "
+        "Your Telegram first name is used automatically. Registration must be ON, "
+        "and your account must have started the bot in private chat.\n\n"
         "❌ <code>/unregister</code> — Cancel your registration before fixtures are generated. "
-        "After fixtures are generated, contact the tournament team.\\n\\n"
-        "📜 <code>/rules</code> — Read the tournament's published rules.\\n\\n"
-        "⚔️ <code>/fixtures</code> — View the fixture schedule, rounds and match results.\\n\\n"
-        "📊 <code>/standings</code> — View the leaderboard for Round Robin tournaments only.\\n\\n"
-        "📚 <code>/tournaments</code> — Browse tournament history for the group."
+        "After fixture generation, contact the tournament team.\n\n"
+        "📜 <code>/rules</code> — Read the published tournament rules.\n\n"
+        "⚔️ <code>/fixtures</code> — View fixtures, rounds and match results.\n\n"
+        "📊 <code>/standings</code> — View standings for Round Robin tournaments.\n\n"
+        "📚 <code>/tournaments</code> — Browse the group's tournament history."
     ),
 
     "personal": (
-        "👤 <b>PERSONAL & ACCOUNT COMMANDS</b>\\n"
-        "<i>These commands can be used in your private chat with the bot.</i>\\n\\n"
-        "🧾 <code>/mystatus</code> — View your tournament registrations, player status and upcoming matches.\\n\\n"
-        "🆔 <code>/myid</code> — Display your Telegram User ID. Share it with a tournament admin if needed.\\n\\n"
-        "❓ <code>/help</code> — Open this help menu.\\n"
+        "👤 <b>PERSONAL &amp; ACCOUNT COMMANDS</b>\n"
+        "<i>Use these commands in your private chat with the bot.</i>\n\n"
+        "🧾 <code>/mystatus</code> — View your registrations, player status and upcoming matches.\n\n"
+        "🆔 <code>/myid</code> — Display your Telegram User ID. Share it with a tournament admin if needed.\n\n"
+        "❓ <code>/help</code> — Open this help menu.\n"
         "🚀 <code>/start</code> — Start the bot and open tournament links."
     ),
 
     "manager": (
-        "🛠 <b>TOURNAMENT MANAGEMENT</b>\\n"
-        "<i>For the tournament manager and appointed tournament admins.</i>\\n"
-        "Commands must be used in the tournament group.\\n\\n"
+        "🛠 <b>TOURNAMENT MANAGEMENT</b>\n"
+        "<i>For the tournament manager and appointed tournament admins.</i>\n"
+        "Use management commands in the tournament group.\n\n"
 
-        "🏆 <b>1. CREATE A TOURNAMENT</b>\\n"
-        "<code>/newtournament Name | Format | Capacity | Description</code>\\n"
-        "Create the group's tournament. Only a Telegram group admin can create it.\\n"
-        "• Format: <code>knockout</code> or <code>round_robin</code>\\n"
-        "• Capacity: optional; use <code>0</code> or leave blank for unlimited.\\n"
-        "• Description: optional.\\n"
-        "<b>Example:</b>\\n"
-        "<code>/newtournament Weekend Cup | knockout | 16 | Fun event</code>\\n"
-        "Only one active tournament is allowed per group. New tournaments start with registration OFF.\\n\\n"
+        "🏆 <b>1. CREATE A TOURNAMENT</b>\n"
+        "<code>/newtournament Name | Format | Capacity | Description</code>\n"
+        "Only a Telegram group admin can create a tournament.\n"
+        "<code>/setrules Rules...</code> — Set or update the tournament rules.\n"
+        "<code>/complete</code> — Mark the tournament as completed.\n\n"
 
-        "👮 <b>2. ADMIN & PLAYER MANAGEMENT</b>\\n"
-        "<code>/addtouradmin USER_ID</code> — Appoint a tournament admin; alternatively reply to their message with <code>/addtouradmin</code>.\\n"
-        "<code>/rmtouradmin USER_ID</code> — Remove tournament-admin access; reply method is also supported. Only the manager can appoint or remove tournament admins.\\n"
-        "<code>/addplayer USER_ID [Name]</code> — Manually register a player by ID, or reply to their message with <code>/addplayer</code>. Registration must be open.\\n"
-        "<code>/rmplayer USER_ID</code> — Completely remove a registered player; alternatively reply to their message with <code>/rmplayer</code>. If fixtures exist but no match result has been recorded, the schedule is rebuilt. Removal is blocked once results exist.\\n"
-        "<code>/participants</code> — View active participants and their Telegram User IDs.\\n\\n"
+        "⚔️ <b>5. FIXTURES &amp; MATCH RESULTS</b>\n"
+        "<code>/generatefixtures</code> — Generate the schedule and open the private fixture editor. Press Done to publish it.\n"
+        "<code>/editfixtures</code> — Re-open the fixture editor before any match result is recorded.\n"
+        "<code>/setresult MATCH_ID WINNER_ID</code> — Record the winner of a match.\n"
+        "<code>/setresult MATCH_ID DRAW</code> — Record a draw in a Round Robin match.\n"
+        "<code>/eleminate LOSER_ID</code> — Eliminate a Knockout player and advance their opponent; in Round Robin, disqualify the player. "
+        "Reply to the player's message with <code>/eleminate</code> also works.\n\n"
 
-        "⚙️ <b>3. TOURNAMENT SETTINGS</b>\\n"
-        "<code>/setdescription New description...</code> — Change the tournament description and refresh its pinned announcement.\\n"
-        "<code>/setrules Rules...</code> — Set or update the rules and refresh the pinned announcement's Rules button.\\n"
-        "<code>/open</code> — Open registration before fixture generation.\\n"
-        "<code>/close</code> — Close registration before fixture generation.\\n"
-        "<code>/complete</code> — Mark the tournament as completed.\\n\\n"
+        "📢 <b>6. ANNOUNCEMENTS</b>\n"
+        "<code>/announce Your message</code> — Post an announcement in the group.\n"
+        "<code>/unpinannouncement</code> — Unpin the latest bot announcement.\n\n"
 
-        "⚔️ <b>4. FIXTURES & MATCH RESULTS</b>\\n"
-        "<code>/generatefixtures</code> — Generate the schedule and open the private fixture editor. Press Done to publish the final draft.\\n"
-        "<code>/editfixtures</code> — Re-open the fixture editor before any match result has been recorded.\\n"
-        "<code>/setresult MATCH_ID WINNER_ID</code> — Record a match winner.\\n"
-        "<code>/setresult MATCH_ID DRAW</code> — Record a draw in a Round Robin match.\\n"
-        "<code>/eleminate LOSER_ID</code> — Eliminate a Knockout player and advance their opponent; in Round Robin, disqualify a player. Reply to the player's message with <code>/eleminate</code> is also supported.\\n\\n"
-
-        "📢 <b>5. ANNOUNCEMENTS</b>\\n"
-        "<code>/announce Your message here</code> — Send an announcement to the group.\\n"
-        "<code>/unpinannouncement</code> — Unpin the latest bot announcement.\\n\\n"
-
-        "📊 <b>6. ADMIN OVERVIEW</b>\\n"
-        "<code>/admintournaments</code> — View tournament history and administration details."
+        "📊 <b>7. ADMIN OVERVIEW</b>\n"
+        "<code>/admintournaments</code> — View tournament administration and history."
     ),
 
     "about": (
-        "ℹ️ <b>ABOUT TOURNAMENT MANAGER</b>\\n\\n"
-        "Tournament Manager helps Telegram groups run competitions with registration, "
-        "player administration, fixtures, match results, standings and pinned announcements.\\n\\n"
-        "🎮 <b>SUPPORTED FORMATS</b>\\n"
-        "• <b>Knockout:</b> Players are eliminated after losing; winners advance through the bracket.\\n"
-        "• <b>Round Robin:</b> Players compete against each other and earn points on the standings table.\\n\\n"
-        "👮 <b>ACCESS LEVELS</b>\\n"
-        "• Telegram group admins can create a tournament.\\n"
-        "• The tournament manager can appoint or remove tournament admins.\\n"
-        "• The manager and appointed tournament admins can use tournament-management commands.\\n\\n"
-        "📌 <b>GROUP SETUP</b>\\n"
-        "The bot must be a Telegram group administrator with permission to pin messages. "
-        "Only one active tournament is allowed in each group.\\n\\n"
-        "Use <code>/help</code> to explore commands."
+        "ℹ️ <b>ABOUT TOURNAMENT MANAGER</b>\n\n"
+        "Tournament Manager helps Telegram groups run competitions with registration, player management, "
+        "fixtures, match results, standings and announcements.\n\n"
+        "🎮 <b>SUPPORTED FORMATS</b>\n"
+        "• <b>Knockout:</b> Players are eliminated after losing; winners advance through the bracket.\n"
+        "• <b>Round Robin:</b> Players compete against each other and earn points in the standings.\n\n"
+        "👮 <b>ACCESS LEVELS</b>\n"
+        "• Telegram group admins can create tournaments.\n"
+        "• The tournament manager can appoint or remove tournament admins.\n"
+        "• The manager and appointed tournament admins can use tournament-management controls.\n\n"
+        "📌 <b>GROUP SETUP</b>\n"
+        "The bot must be a group administrator with permission to pin messages. "
+        "Only one active tournament is allowed in each group.\n\n"
+        "Use <code>/help</code> to explore the commands."
     ),
 }
 
