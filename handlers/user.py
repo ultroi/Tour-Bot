@@ -142,10 +142,10 @@ HELP_TEXTS = {
     "personal": (
         "👤 <b>PERSONAL &amp; ACCOUNT COMMANDS</b>\n"
         "<i>Use these commands in your private chat with the bot.</i>\n\n"
-        "🧾 <code>/mystatus</code> — View your registrations, player status and upcoming matches.\n\n"
-        "🆔 <code>/myid</code> — Display your Telegram User ID. Share it with a tournament admin if needed.\n\n"
-        "❓ <code>/help</code> — Open this help menu.\n"
-        "🚀 <code>/start</code> — Start the bot and open tournament links."
+        "🧾 /mystatus — View your registrations, player status and upcoming matches.\n\n"
+        "🆔 /myid — Display your Telegram User ID. Share it with a tournament admin if needed.\n\n"
+        "❓ /help — Open this help menu.\n"
+        "🚀 /start — Start the bot and open tournament links."
     ),
 
     "manager": (
@@ -156,26 +156,26 @@ HELP_TEXTS = {
         "🏆 <b>1. CREATE A TOURNAMENT</b>\n"
         "/newtournament <code> Tour Name | Format {knockout/round_robin} | Capacity | Description</code>\n"
         "Only a Telegram group admin can create a tournament.\n"
-        "/setrules Rules< — Set or update the tournament rules.\n"
-        "/complete< — Mark the tournament as completed.\n\n"
+        "/setrules Rules — Set or update the tournament rules.\n"
+        "/complete — Mark the tournament as completed.\n\n"
 
         "⚔️ <b>5. FIXTURES &amp; MATCH RESULTS</b>\n"
-        "/generatefixtures< — Generate the schedule and open the private fixture editor. Press Done to publish it.\n"
-        "/editfixtures< — Re-open the fixture editor before any match result is recorded.\n"
-        "/setresult MATCH_ID WINNER_ID< — Record the winner of a match.\n"
-        "/setresult MATCH_ID DRAW< — Record a draw in a Round Robin match.\n"
-        "/eleminate LOSER_ID< — Eliminate a Knockout player and advance their opponent; in Round Robin, disqualify the player. "
+        "/generatefixtures — Generate the schedule and open the private fixture editor. Press Done to publish it.\n"
+        "/editfixtures — Re-open the fixture editor before any match result is recorded.\n"
+        "/setresult MATCH_ID WINNER_ID — Record the winner of a match.\n"
+        "/setresult MATCH_ID DRAW — Record a draw in a Round Robin match.\n"
+        "/eleminate LOSER_ID — Eliminate a Knockout player and advance their opponent; in Round Robin, disqualify the player. "
         "Reply to the player's message with <code>/eleminate</code> also works.\n\n"
 
         "📢 <b>6. ANNOUNCEMENTS</b>\n"
-        "/announce Your message< — Post an announcement in the group.\n"
-        "/unpinannouncement< — Unpin the latest bot announcement.\n\n"
+        "/announce Your message — Post an announcement in the group.\n"
+        "/unpinannouncement — Unpin the latest bot announcement.\n\n"
 
         "📊 <b>7. ADMIN OVERVIEW</b>\n"
-        "/admintournaments< — View tournament administration and history."
-        "/participants< — View the list of registered players and their status.\n"
-        "/addplayer USER_ID< — Manually register a player by their ID.\n"
-        "/rmplayer USER_ID< — Remove a player from the tournament.\n"
+        "/admintournaments — View tournament administration and history."
+        "/participants — View the list of registered players and their status.\n"
+        "/addplayer USER_ID — Manually register a player by their ID.\n"
+        "/rmplayer USER_ID — Remove a player from the tournament.\n"
         
     ),
 
