@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import html
 import time
-
+from telegram.error import BadRequest
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, CallbackQueryHandler
@@ -81,12 +81,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _send_tournament_rules(message, tournament)
         return
 
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📚 View Tournaments", callback_data="help:home"),
+            InlineKeyboardButton("🧾 My Registrations", callback_data="help:personal")
+        ],
+        [
+            InlineKeyboardButton("❓ Help & Commands", callback_data="help:home")
+        ]
+    ])
+
     await message.reply_text(
-        "🏆 Welcome to Tournament Manager!\n\n"
-        "Open the tournament group and tap <b>Register in DM</b> on the pinned tournament post.\n"
-        "Press <b>Start</b> here and I will complete your registration automatically.\n\n"
-        "Use /tournaments to browse tournaments, /myreg to view your registrations, "
-        "and /help to see all commands.",
+        "👋 <b>Welcome to Tournament Manager!</b>\n\n"
+        "Your official hub for managing and competing in group tournaments. 🎮\n\n"
+        "<b>To Register for a Tournament:</b>\n"
+        "1️⃣ Open the tournament group.\n"
+        "2️⃣ Tap <b>Register in DM</b> on the pinned tournament post.\n"
+        "3️⃣ Press <b>Start</b> here, and I'll handle the rest automatically!\n\n"
+        "<i>What would you like to do next? Choose an option below or use the menu.</i>",
+        reply_markup=keyboard,
         parse_mode=ParseMode.HTML,
     )
 
@@ -236,11 +249,23 @@ async def help_callback(
         else category_keyboard()
     )
 
-    await query.edit_message_text(
-        text=HELP_TEXTS[section],
-        reply_markup=keyboard,
-        parse_mode=ParseMode.HTML,
-    )
+    try:
+        # Check if the current message is the start message (it won't have the help text)
+        if "Welcome to Tournament Manager" in query.message.text:
+             await query.edit_message_text(
+                text=HELP_TEXTS[section],
+                reply_markup=keyboard,
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await query.edit_message_text(
+                text=HELP_TEXTS[section],
+                reply_markup=keyboard,
+                parse_mode=ParseMode.HTML,
+            )
+    except BadRequest as exc:
+        if "Message is not modified" not in str(exc):
+            raise exc
 
 
 async def _resolve_tournament(update: Update, context: ContextTypes.DEFAULT_TYPE, allow_completed: bool = True) -> dict | None:
