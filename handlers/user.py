@@ -84,22 +84,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📚 View Tournaments", callback_data="start:tournaments"),
-            InlineKeyboardButton("🧾 My Registrations", callback_data="start:registrations")
-        ],
-        [
             InlineKeyboardButton("❓ Help & Commands", callback_data="help:home")
         ]
     ])
 
     await message.reply_text(
         "👋 <b>Welcome to Tournament Manager!</b>\n\n"
-        "Your official hub for managing and competing in group tournaments. 🎮\n\n"
-        "<b>To Register for a Tournament:</b>\n"
-        "1️⃣ Open the tournament group.\n"
-        "2️⃣ Tap <b>Register in DM</b> on the pinned tournament post.\n"
-        "3️⃣ Press <b>Start</b> here, and I'll handle the rest automatically!\n\n"
-        "<i>What would you like to do next? Choose an option below or use the menu.</i>",
+        "Your official hub for managing and competing in group tournaments. 🎮",
         reply_markup=keyboard,
         parse_mode=ParseMode.HTML,
     )
