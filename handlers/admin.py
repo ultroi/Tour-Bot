@@ -1164,22 +1164,33 @@ async def fixture_editor_callback(update: Update, context: ContextTypes.DEFAULT_
             return
         await context.application.bot_data["db"].tournaments.update_one(
             {"_id": tournament["_id"]},
-            {"$set": {
-                "fixture_round_message_ids": message_ids,
-                "fixtures_finalized": True,
-            }},
+            {
+                "$set": {
+                    "fixture_round_message_ids": message_ids,
+                    "fixtures_finalized": True,
+                }
+            },
         )
-        await refresh_tournament_announcement(context, tournament["_id"])
+
+        await refresh_tournament_announcement(
+            context, tournament["_id"]
+        )
+
         context.user_data.pop("fixture_editor", None)
+
         await query.edit_message_text(
-            "✅ <b>FIXTURES FINALIZED & PUBLISHED</b>\n\n"
-            f"🏆 {html.escape(tournament['name'])}\n"
-            f"📋 {len(rounds)} round message(s) published in the tournament group.\n"
+            (
+                "✅ <b>FIXTURES FINALIZED &amp; PUBLISHED</b>\n\n"
+                f"🏆 {html.escape(tournament['name'])}\n"
+                f"📋 {len(rounds)} round message(s) published in the tournament group.\n"
+                "All group members can navigate rounds using Previous / Next. "
+                "Match results will update these messages automatically."
+            ),
             parse_mode=ParseMode.HTML,
         )
+
         await query.answer("Fixtures published successfully.")
         return
-    await query.answer("Unknown fixture editor action.", show_alert=True)
 
 
 def _recalculate_draft_match_status(match: dict, tournament: dict) -> None:
