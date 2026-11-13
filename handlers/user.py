@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import time
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -20,6 +21,8 @@ from utils import (
     tournament_deep_link,
     tournament_summary,
     user_link,
+    fixture_round_text,
+    fixture_round_keyboard,
 )
 import logging
 
@@ -172,7 +175,8 @@ HELP_TEXTS = {
         "/open — Reopen registration.\n"
         "/complete — Complete tournament.\n\n"
         "⚔️ <b>MATCH MANAGEMENT</b>\n"
-        "/generatefixtures — Generate match schedule.\n"
+        "/generatefixtures — Generate a fixture draft and open the editor.\n"
+        "/editfixtures — Edit the unstarted fixture draft.\n"
         "/setresult MATCH_ID WINNER_USER_ID\n"
         "/eleminate — Knockout: eliminate a loser and advance the opponent. Round robin: disqualify a player.\n"
         "/adminparticipants — View active participant IDs.\n\n"
@@ -354,20 +358,83 @@ async def view_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def view_fixtures(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tournament = await _resolve_tournament(update, context)
     if not tournament:
-        await update.effective_message.reply_text("Tournament not found. Use /fixtures in the group or /fixtures TOURNAMENT_ID in private.")
+        await update.effective_message.reply_text(
+            "Tournament not found. Use /fixtures in the group or /fixtures TOURNAMENT_ID in private."
+        )
         return
-    matches = await context.application.bot_data["tournament_service"].get_matches(tournament["_id"])
+    service = context.application.bot_data["tournament_service"]
+    if tournament.get("fixtures_finalized") is False:
+        await update.effective_message.reply_text("🛠 Tournament admins are preparing the fixtures. Please check again shortly.")
+        return
+    matches = await service.get_matches(tournament["_id"])
     if not matches:
         await update.effective_message.reply_text("Fixtures have not been generated yet.")
         return
-    grouped: dict[int, list[str]] = {}
-    for match in matches:
-        grouped.setdefault(match["round"], []).append(match_line(match))
-    lines = [f"📅 <b>FIXTURES — {html.escape(tournament['name'])}</b>"]
-    for round_number, round_matches in grouped.items():
-        lines.append(f"\n<b>ROUND {round_number}</b>")
-        lines.extend(round_matches)
-    await reply_html_chunks(update.effective_message, lines)
+    rounds = sorted({int(item.get("round", 1)) for item in matches})
+    current = rounds[0]
+    await update.effective_message.reply_text(
+        fixture_round_text(tournament, matches, current),
+        reply_markup=fixture_round_keyboard(tournament["_id"], rounds, current),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+async def fixture_public_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Public round navigation. Every group member can use it; edits are rate-limited."""
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    try:
+        _, tournament_id, round_text = query.data.split(":", 2)
+        round_number = int(round_text)
+    except (ValueError, TypeError):
+        await query.answer("Invalid fixture page.", show_alert=True)
+        return
+
+    # Per-user navigation cooldown to prevent callback spam in busy groups.
+    now = time.monotonic()
+    limits = context.application.bot_data.setdefault("fixture_nav_rate_limits", {})
+    user_id = int(query.from_user.id)
+    previous = float(limits.get(user_id, 0))
+    cooldown = 1.25
+    if now - previous < cooldown:
+        await query.answer("Please wait a moment before changing fixture pages.")
+        return
+    limits[user_id] = now
+    if len(limits) > 5000:
+        cutoff = now - 120
+        context.application.bot_data["fixture_nav_rate_limits"] = {
+            uid: stamp for uid, stamp in limits.items() if stamp >= cutoff
+        }
+
+    service = context.application.bot_data["tournament_service"]
+    tournament = await service.get_tournament(tournament_id)
+    if not tournament or not query.message:
+        await query.answer("Tournament or fixture message not found.", show_alert=True)
+        return
+    if query.message.chat.type != "private" and int(query.message.chat.id) != int(tournament.get("group_id", 0)):
+        await query.answer("These fixtures belong to another group.", show_alert=True)
+        return
+    matches = await service.get_matches(tournament_id)
+    rounds = sorted({int(item.get("round", 1)) for item in matches})
+    if round_number not in rounds:
+        await query.answer("This round is no longer available.", show_alert=True)
+        return
+    try:
+        await query.edit_message_text(
+            fixture_round_text(tournament, matches, round_number),
+            reply_markup=fixture_round_keyboard(tournament_id, rounds, round_number),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        await query.answer()
+    except Exception as exc:
+        if "message is not modified" in str(exc).lower():
+            await query.answer()
+        else:
+            logger.exception("Could not navigate fixture round")
+            await query.answer("Could not update this fixture page.", show_alert=True)
 
 
 async def my_registrations(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

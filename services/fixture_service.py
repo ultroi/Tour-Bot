@@ -4,24 +4,26 @@ from typing import Any
 
 
 def _round_robin(participants: list[dict[str, Any]], tournament_id: str) -> list[dict[str, Any]]:
+    """Create a circle-method round robin. Every pair has a stable slot number."""
     pool: list[dict[str, Any] | None] = list(participants)
     if len(pool) % 2:
         pool.append(None)
     half = len(pool) // 2
     fixtures: list[dict[str, Any]] = []
     for round_index in range(len(pool) - 1):
-        match_number = 0
-        for index in range(half):
-            left, right = pool[index], pool[-(index + 1)]
+        round_number = round_index + 1
+        for pair_index in range(half):
+            left, right = pool[pair_index], pool[-(pair_index + 1)]
+            match_number = pair_index + 1
             if left is None or right is None:
                 bye_player = left or right
                 if bye_player:
                     fixtures.append({
-                        "_id": f"{tournament_id}:R{round_index + 1}-BYE{match_number + 1}",
+                        "_id": f"{tournament_id}:R{round_number}-BYE{match_number}",
                         "tournament_id": tournament_id,
-                        "match_id": f"R{round_index + 1}-BYE{match_number + 1}",
-                        "round": round_index + 1,
-                        "match_no": match_number + 1,
+                        "match_id": f"R{round_number}-BYE{match_number}",
+                        "round": round_number,
+                        "match_no": match_number,
                         "player1_id": bye_player["user_id"],
                         "player2_id": None,
                         "player1_name": bye_player["name"],
@@ -30,12 +32,11 @@ def _round_robin(participants: list[dict[str, Any]], tournament_id: str) -> list
                         "winner_id": bye_player["user_id"],
                     })
                 continue
-            match_number += 1
             fixtures.append({
-                "_id": f"{tournament_id}:R{round_index + 1}-M{match_number}",
+                "_id": f"{tournament_id}:R{round_number}-M{match_number}",
                 "tournament_id": tournament_id,
-                "match_id": f"R{round_index + 1}-M{match_number}",
-                "round": round_index + 1,
+                "match_id": f"R{round_number}-M{match_number}",
+                "round": round_number,
                 "match_no": match_number,
                 "player1_id": left["user_id"],
                 "player2_id": right["user_id"],
@@ -46,7 +47,6 @@ def _round_robin(participants: list[dict[str, Any]], tournament_id: str) -> list
             })
         pool = [pool[0], pool[-1], *pool[1:-1]]
     return fixtures
-
 
 def _knockout(participants: list[dict[str, Any]], tournament_id: str) -> list[dict[str, Any]]:
     count = len(participants)

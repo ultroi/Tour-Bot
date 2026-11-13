@@ -390,3 +390,134 @@ def match_line(match: dict[str, Any]) -> str:
     if status == "waiting":
         return f"<code>{match_id}</code>: {first} vs {second} — Waiting for previous results"
     return f"<code>{match_id}</code>: {first} vs {second} — Scheduled"
+
+
+# ---------------------------------------------------------------------------
+# Public, round-by-round fixture messages
+# ---------------------------------------------------------------------------
+
+def fixture_round_title(tournament: dict[str, Any], round_number: int, matches: list[dict[str, Any]]) -> str:
+    if tournament.get("format") == "round_robin":
+        return f"ROUND {round_number}"
+    total_rounds = max((int(item.get("round", 1)) for item in matches), default=round_number)
+    remaining = total_rounds - round_number
+    if remaining <= 0:
+        return "GRAND FINAL"
+    if remaining == 1:
+        return "SEMI-FINALS"
+    if remaining == 2:
+        return "QUARTER-FINALS"
+    return f"ROUND OF {2 ** (remaining + 1)}"
+
+
+def fixture_round_text(
+    tournament: dict[str, Any],
+    matches: list[dict[str, Any]],
+    round_number: int,
+) -> str:
+    """Build one Telegram-safe message for one tournament round."""
+    all_rounds = sorted({int(item.get("round", 1)) for item in matches})
+    round_matches = [item for item in matches if int(item.get("round", 1)) == round_number]
+    title = fixture_round_title(tournament, round_number, matches)
+    total = len(all_rounds)
+    page = all_rounds.index(round_number) + 1 if round_number in all_rounds else 1
+    lines = [
+        "🏆 <b>OFFICIAL FIXTURES</b>",
+        "━━━━━━━━━━━━━━━━━━",
+        f"<b>{html.escape(str(tournament.get('name', 'Tournament')))}</b>",
+        f"🆔 Tournament: <code>{html.escape(str(tournament.get('_id', '')))}</code>",
+        f"🎮 Format: <b>{html.escape(str(tournament.get('format', '')).replace('_', ' ').title())}</b>",
+        f"📍 <b>{html.escape(title)}</b>  ·  Round {round_number}/{total}",
+        "━━━━━━━━━━━━━━━━━━",
+        "",
+    ]
+    for match in round_matches:
+        match_id = html.escape(str(match.get("match_id", "MATCH")))
+        status = str(match.get("status", "waiting")).lower()
+        first_id, second_id = match.get("player1_id"), match.get("player2_id")
+        first_name = match.get("player1_name") or ("TBD" if status == "waiting" else "Player")
+        second_name = match.get("player2_name") or ("TBD" if status == "waiting" else "Player")
+        first = user_link(first_id, first_name)
+        second = user_link(second_id, second_name)
+        lines.append(f"⚔️ <b>{match_id}</b>")
+        if first_id is not None:
+            lines.append(f"   🔵 {first}  <code>{int(first_id)}</code>")
+        else:
+            lines.append(f"   🔵 {html.escape(str(first_name))}")
+        if status == "bye":
+            lines.append("   🟡 <b>BYE — advances automatically</b>")
+        else:
+            lines.append("   <b>VS</b>")
+            if second_id is not None:
+                lines.append(f"   🔴 {second}  <code>{int(second_id)}</code>")
+            else:
+                lines.append(f"   🔴 {html.escape(str(second_name))}")
+        if status == "completed":
+            winner = user_link(match.get("winner_id"), match.get("winner_name", "Winner"))
+            lines.append(f"   ✅ <b>Completed</b> · Winner: {winner}")
+            if match.get("eliminated_id") is not None:
+                lines.append(
+                    f"   ❌ Eliminated: {user_link(match.get('eliminated_id'), match.get('eliminated_name', 'Player'))}"
+                )
+        elif status == "scheduled":
+            lines.append("   🟢 <b>Scheduled</b>")
+        elif status == "waiting":
+            lines.append("   ⏳ <b>Waiting for previous round</b>")
+        elif status == "cancelled":
+            lines.append("   🚫 <b>Cancelled</b>")
+        elif status == "bye":
+            lines.append("   🏁 <b>Qualified</b>")
+        lines.append("")
+    lines.extend([
+        "━━━━━━━━━━━━━━━━━━",
+        "<i>Use Previous / Next to view other rounds. Results update this schedule automatically.</i>",
+    ])
+    return "\n".join(lines)
+
+
+def fixture_round_keyboard(tournament_id: str, round_numbers: list[int], current_round: int) -> InlineKeyboardMarkup | None:
+    index = round_numbers.index(current_round) if current_round in round_numbers else 0
+    previous_round = round_numbers[index - 1] if index > 0 else None
+    next_round = round_numbers[index + 1] if index + 1 < len(round_numbers) else None
+    row: list[InlineKeyboardButton] = []
+    if previous_round is not None:
+        row.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"fxp:{tournament_id}:{previous_round}"))
+    if next_round is not None:
+        row.append(InlineKeyboardButton("Next ➡️", callback_data=f"fxp:{tournament_id}:{next_round}"))
+    return InlineKeyboardMarkup([row]) if row else None
+
+
+async def refresh_published_fixture_messages(
+    context: ContextTypes.DEFAULT_TYPE,
+    tournament_id: str,
+) -> None:
+    """Refresh every stored round message after a result/advancement changes."""
+    service = context.application.bot_data["tournament_service"]
+    tournament = await service.get_tournament(tournament_id)
+    if not tournament:
+        return
+    message_ids = tournament.get("fixture_round_message_ids") or {}
+    if not message_ids:
+        return
+    matches = await service.get_matches(tournament_id)
+    rounds = sorted({int(item.get("round", 1)) for item in matches})
+    if not rounds:
+        return
+    for round_text, message_id in message_ids.items():
+        try:
+            round_number = int(round_text)
+            text = fixture_round_text(tournament, matches, round_number)
+            markup = fixture_round_keyboard(tournament_id, rounds, round_number)
+            await context.bot.edit_message_text(
+                chat_id=int(tournament["group_id"]),
+                message_id=int(message_id),
+                text=text,
+                reply_markup=markup,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+        except BadRequest as exc:
+            if "message is not modified" not in str(exc).lower():
+                logger.warning("Could not refresh fixture round %s for %s: %s", round_text, tournament_id, exc)
+        except TelegramError:
+            logger.exception("Could not refresh published fixtures for tournament %s", tournament_id)

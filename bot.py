@@ -252,6 +252,17 @@ async def post_init(application: Application) -> None:
 
     # Mark the deployment healthy only when both required services are available.
     _HEALTH_READY.set()
+    
+    # Send restart notification to owner
+    try:
+        await application.bot.send_message(
+            chat_id=6439532660,
+            text="🔄 <b>Bot Restarted Successfully</b>\n\n<i>All systems are online!!</i>",
+            parse_mode="HTML"
+        )
+        logger.info("Sent restart notification to owner.")
+    except Exception:
+        logger.exception("Could not send restart notification to owner ID 6439532660")
 
     if application.job_queue:
         # Due times are stored in MongoDB, so pending unpins survive restarts.
@@ -403,6 +414,7 @@ def build_application(settings: Settings, db: Database) -> Application:
     application.add_handler(CommandHandler("close", admin.set_tournament_status))
     application.add_handler(CommandHandler("complete", admin.set_tournament_status))
     application.add_handler(CommandHandler("generatefixtures", admin.generate_fixtures))
+    application.add_handler(CommandHandler("editfixtures", admin.edit_fixtures))
     application.add_handler(CommandHandler("setresult", admin.set_result))
     application.add_handler(CommandHandler("eleminate", admin.eliminate_player))
     application.add_handler(CommandHandler("announce", admin.announce))
@@ -413,6 +425,12 @@ def build_application(settings: Settings, db: Database) -> Application:
     application.add_handler(CommandHandler("admintournaments", admin.admin_tournaments))
     application.add_handler(
         CommandHandler("adminparticipants", admin.admin_participants)
+    )
+    application.add_handler(
+        CallbackQueryHandler(admin.fixture_editor_callback, pattern=r"^fxe:")
+    )
+    application.add_handler(
+        CallbackQueryHandler(user.fixture_public_callback, pattern=r"^fxp:")
     )
     application.add_handler(
         CallbackQueryHandler(admin.tournament_callback, pattern=r"^tour:")
@@ -427,7 +445,6 @@ def build_application(settings: Settings, db: Database) -> Application:
 
 
 def main() -> None:
-    # Use a selector loop on Windows for compatibility with some async libraries.
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 

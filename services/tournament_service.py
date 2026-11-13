@@ -272,7 +272,7 @@ class TournamentService:
             await self.db.matches.insert_many(fixtures)
             await self.db.tournaments.update_one(
                 {"_id": tid, "status": "generating"},
-                {"$set": {"fixtures_generated": True, "status": "ongoing", "fixtures_generated_at": utc_now()}},
+                {"$set": {"fixtures_generated": True, "fixtures_finalized": False, "status": "ongoing", "fixtures_generated_at": utc_now()}, "$unset": {"fixture_round_message_ids": ""}},
             )
             return fixtures
         except Exception:
@@ -286,6 +286,62 @@ class TournamentService:
     async def get_matches(self, tournament_id: str) -> list[dict[str, Any]]:
         cursor = self.db.matches.find({"tournament_id": tournament_id.upper()}).sort([("round", ASCENDING), ("match_no", ASCENDING)])
         return await cursor.to_list(length=2048)
+
+    async def replace_fixture_draft(
+        self,
+        tournament_id: str,
+        group_id: int,
+        matches: list[dict[str, Any]],
+    ) -> bool:
+        """Replace fixtures before the first result is recorded.
+
+        The editor works on a private in-memory draft; this method is the single
+        commit point reached only after an admin presses Done.
+        """
+        tid = tournament_id.upper()
+        tournament = await self.db.tournaments.find_one({
+            "_id": tid,
+            "group_id": int(group_id),
+            "fixtures_generated": True,
+        })
+        if not tournament:
+            raise LookupError("Generated fixtures for this tournament were not found.")
+        if not matches:
+            raise ValueError("The fixture draft is empty.")
+        completed = await self.db.matches.count_documents({
+            "tournament_id": tid,
+            "status": "completed",
+        })
+        if completed:
+            raise ValueError("Fixtures cannot be edited after a match result has been recorded.")
+
+        clean_matches: list[dict[str, Any]] = []
+        for source in matches:
+            item = dict(source)
+            item.pop("_id", None)
+            item["tournament_id"] = tid
+            clean_matches.append(item)
+
+        previous_matches = await self.get_matches(tid)
+        await self.db.matches.delete_many({"tournament_id": tid})
+        try:
+            await self.db.matches.insert_many(clean_matches)
+        except Exception:
+            # Restore the previous committed schedule if the draft insert fails.
+            await self.db.matches.delete_many({"tournament_id": tid})
+            if previous_matches:
+                await self.db.matches.insert_many(previous_matches)
+            raise
+        await self.db.tournaments.update_one(
+            {"_id": tid, "group_id": int(group_id)},
+            {"$set": {
+                "status": "ongoing",
+                "is_active": True,
+                "fixtures_finalized": True,
+                "fixtures_finalized_at": utc_now(),
+            }, "$unset": {"fixture_round_message_ids": ""}},
+        )
+        return True
 
     async def _save_match_winner(
         self,
