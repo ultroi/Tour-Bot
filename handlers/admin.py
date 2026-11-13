@@ -1027,13 +1027,10 @@ async def fixture_editor_callback(update: Update, context: ContextTypes.DEFAULT_
         match = state["matches"][index]
         for key in ("id", "name"):
             left, right = match.get(f"player1_{key}"), match.get(f"player2_{key}")
-            match[f"player1_{key}"], match[f"player2_{key}"] = right, left
+            # Isko 2 alag-alag lines me kardo:
+            match[f"player1_{key}"] = right
+            match[f"player2_{key}"] = left
         _recalculate_draft_match_status(match, tournament)
-        _rebuild_knockout_bye_slots(state["matches"], tournament)
-        state["selected_match"] = index
-        await query.answer("Players swapped in the draft.")
-        await _render_fixture_match_menu(query, state)
-        return
     if action == "crossstart":
         source_index = int(parts[2])
         source_slot = int(parts[3])
