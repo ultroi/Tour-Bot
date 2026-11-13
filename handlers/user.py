@@ -235,7 +235,13 @@ async def help_callback(
     context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     query = update.callback_query
-    await query.answer()
+    
+    # Safely acknowledge the button press
+    try:
+        await query.answer()
+    except BadRequest as exc:
+        if "is too old" not in str(exc).lower() and "is invalid" not in str(exc).lower():
+            raise  # Rethrow if it's a different BadRequest
 
     section = query.data.split(":", 1)[1]
 
@@ -249,7 +255,6 @@ async def help_callback(
     )
 
     try:
-        # Check if the current message is the start message (it won't have the help text)
         if "Welcome to Tournament Manager" in query.message.text:
              await query.edit_message_text(
                 text=HELP_TEXTS[section],
@@ -265,6 +270,29 @@ async def help_callback(
     except BadRequest as exc:
         if "Message is not modified" not in str(exc):
             raise exc
+
+
+async def start_menu_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Route actions from the private /start menu."""
+    query = update.callback_query
+    if not query:
+        return
+        
+    # Safely acknowledge the button press
+    try:
+        await query.answer()
+    except BadRequest as exc:
+        if "is too old" not in str(exc).lower() and "is invalid" not in str(exc).lower():
+            raise
+
+    action = query.data.split(":", 1)[1]
+    if action == "tournaments":
+        await list_tournaments(update, context)
+    elif action == "mystatus":
+        await my_status(update, context)
 
 
 async def start_menu_callback(
