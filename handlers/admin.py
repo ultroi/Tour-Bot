@@ -9,7 +9,6 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatMemberStatus, ParseMode
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
-from services.fixture_service import generate_fixtures
 
 from utils import (
     is_admin, is_group_chat, match_line, refresh_tournament_announcement,
@@ -1182,8 +1181,6 @@ async def fixture_editor_callback(update: Update, context: ContextTypes.DEFAULT_
             "✅ <b>FIXTURES FINALIZED & PUBLISHED</b>\n\n"
             f"🏆 {html.escape(tournament['name'])}\n"
             f"📋 {len(rounds)} round message(s) published in the tournament group.\n"
-            "All group members can navigate rounds using Previous / Next. "
-            "Match results will update these messages automatically.",
             parse_mode=ParseMode.HTML,
         )
         await query.answer("Fixtures published successfully.")

@@ -399,8 +399,7 @@ def build_application(settings: Settings, db: Database) -> Application:
     application.add_handler(CommandHandler("unregister", user.unregister))
     application.add_handler(CommandHandler("rules", user.view_rules))
     application.add_handler(CommandHandler("fixtures", user.view_fixtures))
-    application.add_handler(CommandHandler("myreg", user.my_registrations))
-    application.add_handler(CommandHandler("participants", user.list_participants))
+    application.add_handler(CommandHandler("mystatus", user.my_status))
     application.add_handler(CommandHandler("standings", user.standings))
     application.add_handler(CommandHandler("myid", user.my_id))
 
@@ -419,13 +418,9 @@ def build_application(settings: Settings, db: Database) -> Application:
     application.add_handler(CommandHandler("eleminate", admin.eliminate_player))
     application.add_handler(CommandHandler("announce", admin.announce))
     application.add_handler(CommandHandler("announceall", admin.announce))
-    application.add_handler(
-        CommandHandler("unpinannouncement", admin.unpin_announcement)
-    )
+    application.add_handler(CommandHandler("unpinannouncement", admin.unpin_announcement))
     application.add_handler(CommandHandler("admintournaments", admin.admin_tournaments))
-    application.add_handler(
-        CommandHandler("adminparticipants", admin.admin_participants)
-    )
+    application.add_handler(CommandHandler("participants", admin.admin_participants))
     application.add_handler(
         CallbackQueryHandler(admin.fixture_editor_callback, pattern=r"^fxe:")
     )

@@ -152,8 +152,6 @@ HELP_TEXTS = {
         "Read tournament rules.\n\n"
         "⚔️ <b>/fixtures</b>\n"
         "View matches, schedules and results.\n\n"
-        "👥 <b>/participants</b>\n"
-        "View registered players.\n\n"
         "📊 <b>/standings</b>\n"
         "View the round-robin leaderboard.\n\n"
         "📚 <b>/tournaments</b>\n"
@@ -163,8 +161,8 @@ HELP_TEXTS = {
     "personal": (
         "👤 <b>PERSONAL COMMANDS</b>\n"
         "<i>Your personal account tools.</i>\n\n"
-        "🧾 <b>/myreg</b>\n"
-        "View your tournament registrations.\n\n"
+        "🧾 <b>/mystatus</b>\n"
+        "View your current status.\n\n"
         "🆔 <b>/myid</b>\n"
         "Get your Telegram user ID.\n\n"
         "❓ <b>/help</b>\n"
@@ -192,7 +190,7 @@ HELP_TEXTS = {
         "/editfixtures — Edit the unstarted fixture draft.\n"
         "/setresult MATCH_ID WINNER_USER_ID\n"
         "/eleminate — Knockout: eliminate a loser and advance the opponent. Round robin: disqualify a player.\n"
-        "/adminparticipants — View active participant IDs.\n\n"
+        "/participants — View active participant IDs.\n\n"
         "📢 <b>ANNOUNCEMENTS</b>\n"
         "/announce Message...\n"
         "/unpinannouncement — Unpin latest announcement.\n\n"
@@ -479,42 +477,82 @@ async def fixture_public_callback(update: Update, context: ContextTypes.DEFAULT_
             await query.answer("Could not update this fixture page.", show_alert=True)
 
 
-async def my_registrations(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def my_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """View user's tournament registrations, current status, and upcoming matches."""
     user_id = update.effective_user.id
     db = context.application.bot_data["db"]
+    service = context.application.bot_data["tournament_service"]
+    
+    # Retrieve all registrations for the user
     registrations = await db.registrations.find({"user_id": user_id}).sort("registered_at", -1).to_list(length=50)
+    
     if not registrations:
         await update.effective_message.reply_text("You have no tournament registrations yet.")
         return
-    lines = ["🧾 <b>YOUR REGISTRATIONS</b>"]
+
+    lines = ["🧾 <b>YOUR TOURNAMENT STATUS</b>\n"]
+    
     for registration in registrations:
         tournament = await db.tournaments.find_one({"_id": registration["tournament_id"]})
-        title = tournament["name"] if tournament else "Deleted tournament"
-        group_title = tournament.get("group_title", "Group") if tournament else "Group"
-        status = " — ❌ ELIMINATED" if registration.get("eliminated") else ""
-        lines.append(
-            f"• {html.escape(title)} — {html.escape(group_title)} — {user_link(user_id, registration['name'])}{status}"
-        )
+        if not tournament:
+            lines.append("• Deleted tournament\n")
+            continue
+            
+        title = html.escape(tournament["name"])
+        group_title = html.escape(tournament.get("group_title", "Group"))
+        
+        # Determine player status
+        if registration.get("disqualified"):
+             status_text = "🚫 <b>DISQUALIFIED</b>"
+        elif registration.get("eliminated"):
+             status_text = "❌ <b>ELIMINATED</b>"
+        elif tournament.get("status") == "completed":
+             if tournament.get("winner_id") == user_id:
+                  status_text = "🏆 <b>CHAMPION</b>"
+             else:
+                  status_text = "🏁 <b>FINISHED</b>"
+        else:
+             status_text = "🟢 <b>ACTIVE</b>"
+             
+        lines.append(f"🏆 <b>{title}</b> ({group_title})")
+        lines.append(f"👤 Player: {user_link(user_id, registration['name'])}")
+        lines.append(f"📊 Status: {status_text}")
+        
+        # If the tournament is active and fixtures exist, find the upcoming match
+        if tournament.get("is_active") and tournament.get("fixtures_finalized"):
+            # Find the user's scheduled or waiting matches
+            matches = await db.matches.find({
+                "tournament_id": tournament["_id"],
+                "status": {"$in": ["scheduled", "waiting", "bye"]},
+                "$or": [{"player1_id": user_id}, {"player2_id": user_id}]
+            }).sort("round", 1).to_list(length=1)
+            
+            if matches:
+                match = matches[0]
+                match_id = html.escape(match["match_id"])
+                round_num = match.get("round", "?")
+                
+                if match.get("status") == "bye":
+                     lines.append(f"⚔️ Next Match: <code>{match_id}</code> (Round {round_num}) — 🟡 <b>BYE (Advances automatically)</b>")
+                elif match.get("status") == "waiting":
+                     lines.append(f"⚔️ Next Match: <code>{match_id}</code> (Round {round_num}) — ⏳ <b>Waiting for opponent...</b>")
+                else: # scheduled
+                     opponent_id = match.get("player2_id") if match.get("player1_id") == user_id else match.get("player1_id")
+                     opponent_name = match.get("player2_name") if match.get("player1_id") == user_id else match.get("player1_name")
+                     opponent = user_link(opponent_id, opponent_name) if opponent_id else "TBD"
+                     lines.append(f"⚔️ Next Match: <code>{match_id}</code> (Round {round_num}) vs {opponent}")
+            elif not registration.get("eliminated") and not registration.get("disqualified"):
+                lines.append("⚔️ Matches: No upcoming matches found.")
+        elif not tournament.get("fixtures_generated"):
+             lines.append("⚔️ Matches: 🛠 Fixtures are not generated yet.")
+             
+        lines.append("")
+
     await reply_html_chunks(update.effective_message, lines)
 
 
 async def my_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(f"Your Telegram user ID: <code>{update.effective_user.id}</code>", parse_mode=ParseMode.HTML)
-
-
-async def list_participants(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    tournament = await _resolve_tournament(update, context)
-    if not tournament:
-        await update.effective_message.reply_text("Tournament not found.")
-        return
-    participants = await context.application.bot_data["tournament_service"].get_participants(tournament["_id"])
-    if not participants:
-        await update.effective_message.reply_text("No one has registered yet.")
-        return
-    lines = [f"👥 <b>PARTICIPANTS — {html.escape(tournament['name'])}</b>"]
-    for number, participant in enumerate(participants, start=1):
-        lines.append(f"{number}. {user_link(participant['user_id'], participant['name'])}")
-    await reply_html_chunks(update.effective_message, lines)
 
 
 async def standings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -554,8 +592,6 @@ async def standings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines.append("\nNo match results have been recorded yet. Each win is worth 3 points.")
     await reply_html_chunks(update.effective_message, lines)
 
-from telegram import Update
-from telegram.ext import ContextTypes
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show real-time statistics for the bot."""
