@@ -135,48 +135,42 @@ HELP_TEXTS = {
         "After fixture generation, contact the tournament team.\n\n"
         "📜 /rules — Read the published tournament rules.\n\n"
         "⚔️ /fixtures — View fixtures, rounds and match results.\n\n"
-        "📊 /standings — View standings for Round Robin tournaments.\n\n"
-        "📚 /tournaments — Browse the group's tournament history."
+        "📊 /standings — View standings for Round Robin tournaments."
     ),
 
     "personal": (
-        "👤 <b>PERSONAL &amp; ACCOUNT COMMANDS</b>\n"
-        "<i>Use these commands in your private chat with the bot.</i>\n\n"
+        "👤 <b>PERSONAL &amp; GENERAL COMMANDS</b>\n"
+        "<i>You can use /help and /stats in any chat. Use /start in a private chat with the bot.</i>\n\n"
         "🧾 /mystatus — View your registrations, player status and upcoming matches.\n\n"
         "🆔 /myid — Display your Telegram User ID. Share it with a tournament admin if needed.\n\n"
         "❓ /help — Open this help menu.\n"
-        "🚀 /start — Start the bot and open tournament links."
+        "🚀 /start — Start the bot or open a tournament link.\n\n"
     ),
 
     "manager": (
-        "🛠 <b>TOURNAMENT MANAGEMENT</b>\n"
-        "<i>For the tournament manager and appointed tournament admins.</i>\n"
-        "Use management commands in the tournament group.\n\n"
-
-        "🏆 <b>1. CREATE A TOURNAMENT</b>\n"
-        "/newtournament <code> Tour Name | Format {knockout/round_robin} | Capacity | Description</code>\n"
-        "Only a Telegram group admin can create a tournament.\n"
-        "/setrules Rules — Set or update the tournament rules.\n"
-        "/complete — Mark the tournament as completed.\n\n"
-
-        "⚔️ <b>5. FIXTURES &amp; MATCH RESULTS</b>\n"
-        "/generatefixtures — Generate the schedule and open the private fixture editor. Press Done to publish it.\n"
-        "/editfixtures — Re-open the fixture editor before any match result is recorded.\n"
-        "/setresult MATCH_ID WINNER_ID — Record the winner of a match.\n"
-        "/setresult MATCH_ID DRAW — Record a draw in a Round Robin match.\n"
-        "/eleminate LOSER_ID — Eliminate a Knockout player and advance their opponent; in Round Robin, disqualify the player. "
-        "Reply to the player's message with <code>/eleminate</code> also works.\n\n"
-
-        "📢 <b>6. ANNOUNCEMENTS</b>\n"
-        "/announce Your message — Post an announcement in the group.\n"
-        "/unpinannouncement — Unpin the latest bot announcement.\n\n"
-
-        "📊 <b>7. ADMIN OVERVIEW</b>\n"
-        "/admintournaments — View tournament administration and history."
-        "/participants — View the list of registered players and their status.\n"
-        "/addplayer USER_ID — Manually register a player by their ID.\n"
-        "/rmplayer USER_ID — Remove a player from the tournament.\n"
-        
+        "🛠 <b>TOURNAMENT MANAGEMENT COMMANDS</b>\n"
+        "<i>Use these in the tournament group. They are for the group admin, tournament manager, or appointed tournament admins as applicable.</i>\n\n"
+        "🏆 <b>Create and manage</b>\n"
+        "/newtournament Name | knockout/round_robin | [capacity] | [description] — Create a tournament. Only a Telegram group admin can do this. Capacity and description are optional.\n"
+        "/setdescription Your text — Change the tournament description.\n"
+        "/setrules Your rules — Add or change the tournament rules.\n"
+        "/open — Open the tournament for registrations.\n"
+        "/close — Close registrations.\n"
+        "/complete — Mark the tournament as finished.\n"
+        "/addtouradmin USER_ID — Give someone tournament admin access. You can also reply to their message with this command.\n"
+        "/rmtouradmin USER_ID — Remove tournament admin access. You can also reply to their message.\n\n"
+        "⚔️ <b>Fixtures and results</b>\n"
+        "/generatefixtures — Make the match schedule and open the private editor. Press Done to publish it.\n"
+        "/editfixtures — Change who plays whom. Pick a match, make changes, then press Done to save and share the schedule. Use before any result is recorded.\n"
+        "/setresult MATCH_ID WINNER_USER_ID — Record the winner, for example <code>/setresult R1-M1 123456789</code>. Use DRAW instead of an ID for a Round Robin draw.\n"
+        "/eleminate LOSER_USER_ID — Remove a player from the competition. In Knockout, their opponent advances; in Round Robin, they are disqualified. You can also reply to the player's message with this command.\n\n"
+        "📢 <b>Announcements and player lists</b>\n"
+        "/announce Your message — Post an announcement. <code>/announceall</code> does the same thing.\n"
+        "/unpinannouncement — Unpin the latest tournament announcement.\n"
+        "/participants — See registered players and their IDs.\n"
+        "/addplayer USER_ID — Register a player using their Telegram ID.\n"
+        "/rmplayer USER_ID — Remove a player using their Telegram ID.\n"
+        "/admintournaments — View tournaments you manage and their history."
     ),
 
     "about": (
@@ -289,24 +283,6 @@ async def _resolve_tournament(update: Update, context: ContextTypes.DEFAULT_TYPE
         return await service.get_tournament(tournament_id)
     await update.effective_message.reply_text("Use this command in the tournament group, or provide a tournament ID in a private chat.")
     return None
-
-
-async def list_tournaments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    service = context.application.bot_data["tournament_service"]
-    if is_group_chat(update):
-        await ensure_group(update, context)
-        tournaments = await service.list_tournaments(group_id=update.effective_chat.id)
-        title = "🏆 <b>TOURNAMENTS IN THIS GROUP</b>"
-    else:
-        tournaments = await service.list_tournaments()
-        title = "🏆 <b>RECENT TOURNAMENTS</b>"
-    if not tournaments:
-        await update.effective_message.reply_text("There are no tournaments to show.")
-        return
-    lines = [title]
-    for item in tournaments:
-        lines.extend(["", tournament_summary(item, include_description=False)])
-    await reply_html_chunks(update.effective_message, lines)
 
 
 async def view_tournament(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

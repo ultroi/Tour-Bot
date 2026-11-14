@@ -393,7 +393,6 @@ def build_application(settings: Settings, db: Database) -> Application:
     application.add_handler(CommandHandler("start", user.start))
     application.add_handler(CommandHandler("stats", user.stats))
     application.add_handler(CommandHandler("help", user.help_command))
-    application.add_handler(CommandHandler("tournaments", user.list_tournaments))
     application.add_handler(CommandHandler("tournament", user.view_tournament))
     application.add_handler(CommandHandler("register", user.register))
     application.add_handler(CommandHandler("unregister", user.unregister))
